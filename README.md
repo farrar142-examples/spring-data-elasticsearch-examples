@@ -280,14 +280,316 @@ lateinit var elasticsearchTemplate: ElasticsearchTemplate
 ```kotlin
 // Repository로는 어려운 복잡한 쿼리 예시
 val query = NativeQuery.builder()
-    .withQuery { q -> q.bool { b -> 
-        b.must { m -> m.match { it.field("name").query("스마트폰") } }
-         .filter { f -> f.range { it.field("price").gte(JsonData.of(10000)) } }
-    }}
-    .withAggregation("category_agg", Aggregation.of { a -> 
+    .withQuery { q ->
+        q.bool { b ->
+            b.must { m -> m.match { it.field("name").query("스마트폰") } }
+                .filter { f -> f.range { it.field("price").gte(JsonData.of(10000)) } }
+        }
+    }
+    .withAggregation("category_agg", Aggregation.of { a ->
         a.terms { it.field("category") }
     })
     .build()
 
 val result = elasticsearchOperations.search(query, Product::class.java)
+```
 
+# 7, TextField를 사용한 검색 예제
+
+```kotlin
+// src/main/kotlin/com/example/demo/products/repositories/ProductRepository.kt
+fun findByName(name: String): List<Product>
+fun findByNameIn(names: List<String>): List<Product>
+
+```
+
+```kotlin
+// src/test/kotlin/com/example/demo/ElasticsearchQueryTests.kt
+@Test
+fun `Text 필드 검색 예제`() {
+    println("ElasticsearchRepository 를 사용한 검색")
+    println("1. Text 필드에 \"Apple\"이 포함된 문서 검색")
+    val appleProducts = productRepository.findByName("Apple")
+    assert(appleProducts.size == 2)
+    appleProducts.forEach {
+        println(it.name)
+    }
+    println("2. Text 필드에 여러 값이 포함된 문서 검색")
+    val multiProducts = productRepository.findByNameIn(listOf("Apple", "Samsung"))
+    assert(multiProducts.size == 3)
+    multiProducts.forEach {
+        println(it.name)
+    }
+    println("ElasticsearchOperations 를 사용한 검색")
+    println("1. Text 필드에 \"Apple\"이 포함된 문서 검색")
+    // Text 필드는 토큰화되므로 match 쿼리를 사용해야 합니다.
+    // term 쿼리는 Keyword 필드에 사용합니다.
+    val appleQuery = NativeQueryBuilder().withQuery { q ->
+        q.match { m -> m.field("name").query("Apple") }
+    }.build()
+    val appleProductsWithNativeQuery = elasticsearchOperations.search(
+        appleQuery,
+        Product::class.java
+    )
+    assertContentEquals(appleProducts, appleProductsWithNativeQuery.map { it.content })
+    appleProductsWithNativeQuery.forEach {
+        println(it.content.name)
+    }
+    println("Text 필드에 여러 값이 포함된 문서 검색")
+    println("1: Bool + Should (각 값마다 should 절 추가)")
+    val multiQueryWithBool = NativeQueryBuilder().withQuery { q ->
+        q.bool { b ->
+            b.should { s -> s.match { m -> m.field("name").query("Apple") } }
+            b.should { s -> s.match { m -> m.field("name").query("Samsung") } }
+        }
+    }.build()
+    val multiQueryWithBoolQuery = elasticsearchOperations.search(
+        multiQueryWithBool,
+        Product::class.java
+    )
+    multiQueryWithBoolQuery.forEach {
+        println(it.content.name)
+    }
+    println("2: simple_query_string - 여러 값을 OR로 연결하여 더 간결하게 작성")
+    val multiQueryWithSimpleQueryString = NativeQueryBuilder().withQuery { q ->
+        q.simpleQueryString { s ->
+            s.query("Apple | Samsung")
+                .fields("name")
+        }
+    }.build()
+    val multiProductsWithSimpleQueryStringQuery = elasticsearchOperations.search(
+        multiQueryWithSimpleQueryString,
+        Product::class.java
+    )
+    multiProductsWithSimpleQueryStringQuery.forEach {
+        println(it.content.name)
+    }
+    assertContentEquals(multiProducts, multiQueryWithBoolQuery.map { it.content })
+    assertContentEquals(multiProducts, multiProductsWithSimpleQueryStringQuery.map { it.content })
+    println("Keyword 필드로 검색 했을 때와의 차이점 확인")
+    val keywordQuery = NativeQueryBuilder().withQuery { q ->
+        q.term { t -> t.field("name").value("Apple") }
+    }.build()
+    val keywordProducts = elasticsearchOperations.search(
+        keywordQuery,
+        Product::class.java
+    )
+    keywordProducts.takeIf { it.none() }.let {
+        println("Keyword 필드로는 'Apple' 단독 검색 시 문서가 검색되지 않음")
+    }
+    assert(keywordProducts.isEmpty)
+}
+
+```
+
+> 실행결과
+
+```
+ElasticsearchRepository 를 사용한 검색
+1. Text 필드에 "Apple"이 포함된 문서 검색
+Apple iPhone 13
+Apple MacBook Pro
+2. Text 필드에 여러 값이 포함된 문서 검색
+Samsung Galaxy S21
+Apple iPhone 13
+Apple MacBook Pro
+ElasticsearchOperations 를 사용한 검색
+1. Text 필드에 "Apple"이 포함된 문서 검색
+Apple iPhone 13
+Apple MacBook Pro
+Text 필드에 여러 값이 포함된 문서 검색
+1: Bool + Should (각 값마다 should 절 추가)
+Samsung Galaxy S21
+Apple iPhone 13
+Apple MacBook Pro
+2: simple_query_string - 여러 값을 OR로 연결하여 더 간결하게 작성
+Samsung Galaxy S21
+Apple iPhone 13
+Apple MacBook Pro
+Keyword 필드로 검색 했을 때와의 차이점 확인
+Keyword 필드로는 'Apple' 단독 검색 시 문서가 검색되지 않음
+```
+
+### match, term, terms 쿼리의 차이
+
+Elasticsearch에서 가장 많이 사용되는 세 가지 쿼리입니다. 각 쿼리는 **사용 목적과 대상 필드 타입이 다릅니다.**
+
+#### 한눈에 보는 비교표
+
+| 쿼리        | 대상 필드   | 분석기 적용 | 용도            | 예시                                            |
+|-----------|---------|--------|---------------|-----------------------------------------------|
+| **match** | Text    | ✅ 적용   | Full-Text 검색  | `"Apple iPhone"` → `["apple", "iphone"]`으로 검색 |
+| **term**  | Keyword | ❌ 미적용  | 정확한 값 1개 매칭   | `"Electronics"` 정확히 일치하는 문서 검색                |
+| **terms** | Keyword | ❌ 미적용  | 정확한 값 여러 개 매칭 | `["Electronics", "Computers"]` 중 하나라도 일치      |
+
+#### 1. match 쿼리 (Text 필드용)
+
+`match` 쿼리는 **검색어를 분석기로 토큰화한 후** 검색합니다.
+
+```kotlin
+// "Apple iPhone"을 검색하면 → ["apple", "iphone"]으로 토큰화
+// name 필드에 "apple" 또는 "iphone"이 포함된 문서를 찾음
+val query = NativeQueryBuilder().withQuery { q ->
+    q.match { m -> m.field("name").query("Apple iPhone") }
+}.build()
+```
+
+**특징:**
+
+- 대소문자를 구분하지 않음 (`"Apple"` = `"apple"`)
+- 검색어가 여러 단어면 OR 조건으로 검색 (기본값)
+- **Text 필드에서만 사용** (Keyword 필드에서도 동작하지만 비효율적)
+
+#### 2. term 쿼리 (Keyword 필드용)
+
+`term` 쿼리는 **검색어를 분석하지 않고 정확히 일치하는 값**을 찾습니다.
+
+```kotlin
+// category가 정확히 "Electronics"인 문서만 검색
+val query = NativeQueryBuilder().withQuery { q ->
+    q.term { t -> t.field("category").value("Electronics") }
+}.build()
+```
+
+**특징:**
+
+- 대소문자를 구분함 (`"Electronics"` ≠ `"electronics"`)
+- 정확히 일치해야만 검색됨
+- **Keyword 필드에서 사용** (Text 필드에서는 제대로 동작하지 않음)
+
+#### 3. terms 쿼리 (Keyword 필드용, 다중 값)
+
+`terms` 쿼리는 **여러 값 중 하나라도 일치하면** 검색됩니다. SQL의 `IN` 연산자와 유사합니다.
+
+```kotlin
+// category가 "Electronics" 또는 "Computers"인 문서 검색
+// SQL: WHERE category IN ('Electronics', 'Computers')
+val query = NativeQueryBuilder().withQuery { q ->
+    q.terms { t ->
+        t.field("category")
+            .terms { v ->
+                v.value(
+                    listOf(
+                        FieldValue.of("Electronics"),
+                        FieldValue.of("Computers")
+                    )
+                )
+            }
+    }
+}.build()
+```
+
+**특징:**
+
+- 여러 값을 한 번에 검색할 때 효율적
+- **Keyword 필드에서만 사용**
+- Text 필드에서는 `bool` + `should` + `match` 조합을 사용해야 함
+
+#### ⚠️ 흔한 실수: Text 필드에 term 쿼리 사용
+
+```kotlin
+// ❌ 잘못된 예시: Text 필드에 term 쿼리 사용
+val query = NativeQueryBuilder().withQuery { q ->
+    q.term { t -> t.field("name").value("Apple") }  // name은 Text 필드!
+}.build()
+// 결과: 검색 안 됨!
+```
+
+**왜 안 될까?**
+
+1. `"Apple iPhone 13"`이 Text 필드에 저장될 때 → `["apple", "iphone", "13"]`으로 토큰화
+2. `term` 쿼리로 `"Apple"`을 검색 → 분석 없이 그대로 `"Apple"` 검색
+3. 저장된 값은 소문자 `"apple"`, 검색어는 대문자 `"Apple"` → **불일치!**
+
+```kotlin
+// ✅ 올바른 예시: Text 필드에 match 쿼리 사용
+val query = NativeQueryBuilder().withQuery { q ->
+    q.match { m -> m.field("name").query("Apple") }  // match 사용!
+}.build()
+// 결과: "Apple"이 포함된 문서 검색됨
+```
+
+### simple_query_string 쿼리
+
+`simple_query_string`은 **사용자 친화적인 검색 문법**을 제공하는 쿼리입니다. 검색창에서 사용자가 직접 입력할 수 있는 간단한 문법을 지원합니다.
+
+#### 기본 사용법
+
+```kotlin
+val query = NativeQueryBuilder().withQuery { q ->
+    q.simpleQueryString { s ->
+        s.query("Apple | Samsung")  // Apple OR Samsung
+            .fields("name")
+    }
+}.build()
+```
+
+#### 지원하는 연산자
+
+| 연산자     | 의미    | 예시                   | 설명                   |
+|---------|-------|----------------------|----------------------|
+| `\|`    | OR    | `"Apple \| Samsung"` | Apple 또는 Samsung 포함  |
+| `+`     | AND   | `"Apple + iPhone"`   | Apple과 iPhone 모두 포함  |
+| `-`     | NOT   | `"Apple -iPhone"`    | Apple 포함, iPhone 제외  |
+| `"..."` | 구문 검색 | `"\"iPhone 13\""`    | "iPhone 13"이 연속으로 포함 |
+| `*`     | 와일드카드 | `"App*"`             | App으로 시작하는 단어        |
+| `~N`    | 퍼지 검색 | `"Aple~1"`           | 오타 허용 (편집 거리 1)      |
+
+#### 실전 예시
+
+```kotlin
+// 예시 1: OR 검색 - Apple 또는 Samsung이 포함된 제품
+val orQuery = NativeQueryBuilder().withQuery { q ->
+    q.simpleQueryString { s ->
+        s.query("Apple | Samsung")
+            .fields("name")
+    }
+}.build()
+
+// 예시 2: AND 검색 - Apple과 iPhone이 모두 포함된 제품
+val andQuery = NativeQueryBuilder().withQuery { q ->
+    q.simpleQueryString { s ->
+        s.query("Apple + iPhone")
+            .fields("name")
+    }
+}.build()
+
+// 예시 3: NOT 검색 - Apple은 포함하고 MacBook은 제외
+val notQuery = NativeQueryBuilder().withQuery { q ->
+    q.simpleQueryString { s ->
+        s.query("Apple -MacBook")
+            .fields("name")
+    }
+}.build()
+
+// 예시 4: 여러 필드에서 검색
+val multiFieldQuery = NativeQueryBuilder().withQuery { q ->
+    q.simpleQueryString { s ->
+        s.query("스마트폰")
+            .fields("name", "description")  // name과 description 모두에서 검색
+    }
+}.build()
+```
+
+#### simple_query_string vs query_string
+
+| 구분           | simple_query_string | query_string              |
+|--------------|---------------------|---------------------------|
+| **문법 오류 처리** | 무시하고 최대한 검색         | 오류 발생                     |
+| **사용 대상**    | 일반 사용자 검색창          | 개발자/고급 사용자                |
+| **지원 연산자**   | 기본 연산자만             | 더 많은 연산자 (AND, OR, NOT 등) |
+| **안정성**      | ✅ 높음                | ⚠️ 잘못된 입력 시 에러            |
+
+> **권장**: 사용자 입력을 직접 받는 검색창에는 `simple_query_string`을 사용하세요. 문법 오류가 발생해도 애플리케이션이 중단되지 않습니다.
+
+### 쿼리 선택 가이드
+
+```
+검색하려는 필드가 Text 타입인가?
+├── Yes → match 또는 simple_query_string 사용
+│         ├── 단순 검색 → match
+│         └── OR/AND/NOT 조합 → simple_query_string
+└── No (Keyword 타입) → term 또는 terms 사용
+                        ├── 값 1개 → term
+                        └── 값 여러 개 → terms
+```
