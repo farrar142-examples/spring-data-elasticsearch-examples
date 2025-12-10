@@ -17,3 +17,12 @@ services:
         - discovery.type=single-node
         - xpack.security.enabled=false
 ```
+2. application.yml 설정
+```yml
+spring:
+  application:
+    name: demo
+  elasticsearch:
+    uris:
+      - http://localhost:9200
+```
