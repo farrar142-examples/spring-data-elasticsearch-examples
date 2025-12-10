@@ -1,4 +1,4 @@
-1. Elasticsearch 설치
+# 1. Elasticsearch 설치
 
 ```Dockerfile
 FROM  elasticsearch:9.2.2
@@ -20,7 +20,7 @@ services:
       - xpack.security.enabled=false
 ```
 
-2. application.yml 설정
+# 2. application.yml 설정
 
 ```yml
 spring:
@@ -31,7 +31,7 @@ spring:
       - http://localhost:9200
 ```
 
-3. ElasticsearchConfig 설정
+# 3. ElasticsearchConfig 설정
 
 ```kotlin
 // src/main/kotlin/com/example/demo/globals/configs/ElasticsearchConfig.kt
@@ -59,7 +59,7 @@ Spring Data JPA를 사용할 때 `@EnableJpaRepositories`가 자동 설정되는
 
 > **참고**: `basePackages`를 지정하지 않으면 해당 설정 클래스가 위치한 패키지와 그 하위 패키지를 스캔합니다.
 
-4. Product Document 정의
+# 4. Product Document 정의
 
 Spring Data Elasticsearch에서는 `@Document` 어노테이션을 사용하여 Elasticsearch 인덱스와 매핑되는 도메인 클래스를 정의합니다.
 
@@ -189,7 +189,7 @@ RDBMS에서는 컬럼 타입(VARCHAR, INT 등)에 관계없이 쿼리 문법이 
 
 따라서 문서의 특성과 검색 요구사항을 고려하여 **적절한 필드 타입을 선택하는 것이 중요**합니다.
 
-5. ProductRepository 정의
+# 5. ProductRepository 정의
 
 ```kotlin
 // src/main/kotlin/com/example/demo/products/repositories/ProductRepository.kt
@@ -202,3 +202,92 @@ class ProductService(
     private val productRepository: ProductRepository
 ) 
 ```
+
+# 6. Document 생성 예제
+
+```kotlin
+// src/test/kotlin/com/example/demo/ElasticsearchQueryTests.kt
+@SpringBootTest
+class ElasticsearchQueryDSLTests {
+    @Autowired
+    lateinit var productRepository: ProductRepository
+
+    @Autowired
+    lateinit var elasticsearchOperations: ElasticsearchOperations
+
+    @BeforeEach
+    fun setUp() {
+        productRepository.deleteAll()
+    }
+
+    @Test
+    fun `기본적인 문서 생성 작업`() {
+        val product = Product(
+            id = "1",
+            name = "Sample Product",
+            description = "This is a sample product",
+            price = 2000,
+            category = "Sample Category",
+            stock = 50,
+            createdAt = LocalDateTime.now(),
+            available = true
+        ).let(productRepository::save)
+        assertNotNull(product.id)
+    }
+
+}
+```
+
+### ElasticsearchOperations란?
+
+`ElasticsearchOperations`는 Spring Data Elasticsearch에서 제공하는 **인터페이스**로, Elasticsearch와의 모든 저수준(low-level) 작업을 추상화합니다.
+
+**주요 기능:**
+
+- 문서 CRUD 작업 (`save`, `get`, `delete`)
+- 인덱스 관리 (`indexOps`)
+- 복잡한 검색 쿼리 실행 (`search`)
+- 벌크 작업 (`bulkIndex`, `bulkUpdate`)
+
+### ElasticsearchOperations vs ElasticsearchTemplate
+
+| 구분        | ElasticsearchOperations | ElasticsearchTemplate |
+|-----------|-------------------------|-----------------------|
+| **타입**    | 인터페이스                   | 구현체 (클래스)             |
+| **역할**    | 계약(Contract) 정의         | 실제 동작 구현              |
+| **권장 여부** | ✅ 권장                    | ⚠️ 직접 사용 비권장          |
+
+`ElasticsearchTemplate`은 `ElasticsearchOperations` 인터페이스의 **구현체**입니다. Spring Boot가 자동으로 `ElasticsearchTemplate` 빈을 생성하고,
+이를 `ElasticsearchOperations` 타입으로 주입받을 수 있습니다.
+
+```kotlin
+// 권장: 인터페이스 타입으로 주입
+@Autowired
+lateinit var elasticsearchOperations: ElasticsearchOperations
+
+// 비권장: 구현체 타입으로 직접 주입
+@Autowired
+lateinit var elasticsearchTemplate: ElasticsearchTemplate
+```
+
+### 왜 ElasticsearchOperations를 사용하는가?
+
+**Repository로 해결되지 않는 복잡한 쿼리**
+
+`ElasticsearchRepository`는 간단한 CRUD와 메서드 이름 기반 쿼리를 지원하지만, 복잡한 집계(Aggregation)나 동적 쿼리는 `ElasticsearchOperations`를 직접 사용해야
+합니다.
+
+```kotlin
+// Repository로는 어려운 복잡한 쿼리 예시
+val query = NativeQuery.builder()
+    .withQuery { q -> q.bool { b -> 
+        b.must { m -> m.match { it.field("name").query("스마트폰") } }
+         .filter { f -> f.range { it.field("price").gte(JsonData.of(10000)) } }
+    }}
+    .withAggregation("category_agg", Aggregation.of { a -> 
+        a.terms { it.field("category") }
+    })
+    .build()
+
+val result = elasticsearchOperations.search(query, Product::class.java)
+
