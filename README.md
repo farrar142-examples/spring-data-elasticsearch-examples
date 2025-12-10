@@ -189,5 +189,16 @@ RDBMS에서는 컬럼 타입(VARCHAR, INT 등)에 관계없이 쿼리 문법이 
 
 따라서 문서의 특성과 검색 요구사항을 고려하여 **적절한 필드 타입을 선택하는 것이 중요**합니다.
 
+5. ProductRepository 정의
+
+```kotlin
+// src/main/kotlin/com/example/demo/products/repositories/ProductRepository.kt
+interface ProductRepository : ElasticsearchRepository<Product, String> 
 ```
-4. 
+
+```kotlin
+@Service
+class ProductService(
+    private val productRepository: ProductRepository
+) 
+```
