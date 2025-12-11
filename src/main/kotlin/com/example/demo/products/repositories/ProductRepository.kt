@@ -1,6 +1,8 @@
 package com.example.demo.products.repositories
 
 import com.example.demo.products.documents.Product
+import org.springframework.data.domain.Page
+import org.springframework.data.domain.Pageable
 import org.springframework.data.domain.Sort
 import org.springframework.data.elasticsearch.repository.ElasticsearchRepository
 import java.time.LocalDateTime
@@ -28,4 +30,8 @@ interface ProductRepository : ElasticsearchRepository<Product, String> {
 	fun findAllByOrderByPriceAsc(): List<Product>
 	fun findAllByOrderByPriceDesc(): List<Product>
 	fun findByAvailable(available: Boolean, sort: Sort): List<Product>
+
+	// 페이징 관련 메서드
+	fun findAllBy(pageable: Pageable): Page<Product>
+	fun findByAvailable(available: Boolean, pageable: Pageable): Page<Product>
 }

@@ -14,6 +14,7 @@ import org.junit.jupiter.api.assertNotNull
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.web.format.DateTimeFormatters
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
 import org.springframework.data.elasticsearch.client.elc.NativeQuery
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder
@@ -603,5 +604,221 @@ class ElasticsearchQueryTests {
 			multiSort.map { it.id },
 			multiSortQuery.searchHits.map { it.content.id }
 		)
+	}
+
+	@Test
+	fun `Pagination을 사용한 페이징 예제`() {
+		// 테스트용 추가 데이터 생성
+		listOf(
+			Product(
+				name = "Sony Headphones",
+				description = "High quality wireless headphones",
+				price = 299,
+				category = "Electronics",
+				stock = 200,
+				createdAt = LocalDateTime.now().minusDays(2),
+				available = true
+			),
+			Product(
+				name = "LG Monitor",
+				description = "27 inch 4K monitor",
+				price = 499,
+				category = "Electronics",
+				stock = 80,
+				createdAt = LocalDateTime.now().minusDays(3),
+				available = true
+			)
+		).let(productRepository::saveAll)
+
+		println("=== ElasticsearchRepository를 사용한 페이징 ===")
+
+		println("1. 기본 페이징 (첫 번째 페이지, 2개씩)")
+		val page0 = productRepository.findAllBy(PageRequest.of(0, 2))
+		page0.content.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assertEquals(2, page0.content.size)
+		assertEquals(5, page0.totalElements)
+		assertEquals(3, page0.totalPages)
+		assertEquals(0, page0.number)
+		assertEquals(true, page0.hasNext())
+
+		println("2. 두 번째 페이지")
+		val page1 = productRepository.findAllBy(PageRequest.of(1, 2))
+		page1.content.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assertEquals(2, page1.content.size)
+		assertEquals(1, page1.number)
+		assertEquals(true, page1.hasNext())
+
+		println("3. 마지막 페이지")
+		val page2 = productRepository.findAllBy(PageRequest.of(2, 2))
+		page2.content.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assertEquals(1, page2.content.size)
+		assertEquals(2, page2.number)
+		assertEquals(false, page2.hasNext())
+
+		println("4. 페이징 + 정렬 (가격 오름차순)")
+		val pageWithSort = productRepository.findAllBy(PageRequest.of(0, 2, Sort.by(Sort.Direction.ASC, "price")))
+		pageWithSort.content.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assertEquals(2, pageWithSort.content.size)
+		assertEquals(299, pageWithSort.content.first().price)
+
+		println("5. 조건 + 페이징 (available=true, 2개씩)")
+		val pageWithCondition = productRepository.findByAvailable(true, PageRequest.of(0, 2))
+		pageWithCondition.content.forEach {
+			println("${it.name} - ${it.available}")
+		}
+		assertEquals(2, pageWithCondition.content.size)
+		assertEquals(5, pageWithCondition.totalElements)
+
+		println("\n=== ElasticsearchOperations를 사용한 페이징 ===")
+
+		println("1. 기본 페이징 (첫 번째 페이지, 2개씩)")
+		val page0Query = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.matchAll { it } }
+				.withPageable(PageRequest.of(0, 2))
+				.build(),
+			Product::class.java
+		)
+		page0Query.searchHits.forEach {
+			println("${it.content.name} - ${it.content.price}")
+		}
+		assertEquals(2, page0Query.searchHits.size)
+		assertEquals(5, page0Query.totalHits)
+		assertEquals(
+			page0.content.map { it.id },
+			page0Query.searchHits.map { it.content.id }
+		)
+
+		println("2. 두 번째 페이지")
+		val page1Query = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.matchAll { it } }
+				.withPageable(PageRequest.of(1, 2))
+				.build(),
+			Product::class.java
+		)
+		page1Query.searchHits.forEach {
+			println("${it.content.name} - ${it.content.price}")
+		}
+		assertEquals(2, page1Query.searchHits.size)
+		assertEquals(
+			page1.content.map { it.id },
+			page1Query.searchHits.map { it.content.id }
+		)
+
+		println("3. 마지막 페이지")
+		val page2Query = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.matchAll { it } }
+				.withPageable(PageRequest.of(2, 2))
+				.build(),
+			Product::class.java
+		)
+		page2Query.searchHits.forEach {
+			println("${it.content.name} - ${it.content.price}")
+		}
+		assertEquals(1, page2Query.searchHits.size)
+		assertEquals(
+			page2.content.map { it.id },
+			page2Query.searchHits.map { it.content.id }
+		)
+
+		println("4. 페이징 + 정렬 (가격 오름차순)")
+		val pageWithSortQuery = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.matchAll { it } }
+				.withPageable(PageRequest.of(0, 2, Sort.by(Sort.Direction.ASC, "price")))
+				.build(),
+			Product::class.java
+		)
+		pageWithSortQuery.searchHits.forEach {
+			println("${it.content.name} - ${it.content.price}")
+		}
+		assertEquals(2, pageWithSortQuery.searchHits.size)
+		assertEquals(
+			pageWithSort.content.map { it.id },
+			pageWithSortQuery.searchHits.map { it.content.id }
+		)
+
+		println("5. 조건 + 페이징 (available=true, 2개씩)")
+		val pageWithConditionQuery = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.term { t -> t.field("available").value(true) } }
+				.withPageable(PageRequest.of(0, 2))
+				.build(),
+			Product::class.java
+		)
+		pageWithConditionQuery.searchHits.forEach {
+			println("${it.content.name} - ${it.content.available}")
+		}
+		assertEquals(2, pageWithConditionQuery.searchHits.size)
+		assertEquals(5, pageWithConditionQuery.totalHits)
+		assertEquals(
+			pageWithCondition.content.map { it.id },
+			pageWithConditionQuery.searchHits.map { it.content.id }
+		)
+
+		println("6. Search After를 사용한 페이징 (Deep Pagination 해결)")
+
+		println("1. 첫 번째 페이지 조회 (정렬 필수)")
+		val firstPageQuery = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.matchAll { it } }
+				.withSort(Sort.by(Sort.Direction.ASC, "price"))
+				.withPageable(PageRequest.of(0, 2))
+				.build(),
+			Product::class.java
+		)
+		firstPageQuery.searchHits.forEach {
+			println("${it.content.name} - ${it.content.price} - sortValues: ${it.sortValues}")
+		}
+		assertEquals(2, firstPageQuery.searchHits.size)
+
+		// 마지막 문서의 sortValues 가져오기
+		val lastSortValues = firstPageQuery.searchHits.last().sortValues
+		println("마지막 문서의 sortValues: $lastSortValues")
+
+		println("2. Search After로 두 번째 페이지 조회")
+		val secondPageQuery = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.matchAll { it } }
+				.withSort(Sort.by(Sort.Direction.ASC, "price"))
+				.withSearchAfter(lastSortValues)
+				.withPageable(PageRequest.of(0, 2))
+				.build(),
+			Product::class.java
+		)
+		secondPageQuery.searchHits.forEach {
+			println("${it.content.name} - ${it.content.price} - sortValues: ${it.sortValues}")
+		}
+		assertEquals(2, secondPageQuery.searchHits.size)
+		// 두 번째 페이지의 첫 번째 가격이 첫 번째 페이지의 마지막 가격보다 커야 함
+		assert(secondPageQuery.searchHits.first().content.price > firstPageQuery.searchHits.last().content.price)
+
+		// 두 번째 페이지의 마지막 sortValues로 세 번째 페이지 조회
+		val secondLastSortValues = secondPageQuery.searchHits.last().sortValues
+
+		println("3. Search After로 세 번째(마지막) 페이지 조회")
+		val thirdPageQuery = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.matchAll { it } }
+				.withSort(Sort.by(Sort.Direction.ASC, "price"))
+				.withSearchAfter(secondLastSortValues)
+				.withPageable(PageRequest.of(0, 2))
+				.build(),
+			Product::class.java
+		)
+		thirdPageQuery.searchHits.forEach {
+			println("${it.content.name} - ${it.content.price} - sortValues: ${it.sortValues}")
+		}
+		assertEquals(1, thirdPageQuery.searchHits.size)
 	}
 }

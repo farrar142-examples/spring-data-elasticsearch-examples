@@ -596,6 +596,15 @@ val multiFieldQuery = NativeQueryBuilder().withQuery { q ->
 # 8. NumberField를 사용한 검색 예제
 ```kotlin
 // src/main/kotlin/com/example/demo/products/repositories/ProductRepository.kt
+fun findByPrice(price: Long): List<Product>
+fun findByPriceGreaterThanEqual(price: Long): List<Product>
+fun findByPriceLessThanEqual(price: Long): List<Product>
+fun findByPriceBetween(minPrice: Long, maxPrice: Long): List<Product>
+fun findByPriceIn(prices: List<Long>): List<Product>
+
+```
+```kotlin
+// src/main/kotlin/com/example/demo/products/repositories/ProductRepository.kt
 @Test
 	fun `Number 필드 검색 예제`(){
 		println("ElasticsearchRepository 를 사용한 검색")
@@ -778,7 +787,14 @@ q.term { t -> t.field("price").value(899.99) }  // 실패 가능!
     └── range (gte, lte, gt, lt)
     
 ```
-9. DateField를 사용한 검색 예제
+# 9. DateField를 사용한 검색 예제
+```kotlin
+// src/main/kotlin/com/example/demo/products/repositories/ProductRepository.kt
+fun findByCreatedAtBetween(start: LocalDateTime, end: LocalDateTime): List<Product>
+fun findByCreatedAtBefore(end: LocalDateTime): List<Product>
+fun findByCreatedAtAfter(start: LocalDateTime): List<Product>
+
+```
 ```kotlin
 // src/main/kotlin/com/example/demo/products/repositories/ElasticsearchQueryTests.kt
 @Test
@@ -1003,6 +1019,9 @@ val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
 ```
 
 # 9. BooleanField를 사용한 검색 예제
+```kotlin
+fun findByAvailable(available: Boolean): List<Product>
+```
 ```kotlin
 // src/main/kotlin/com/example/demo/products/repositories/ElasticsearchQueryTests.kt
 fun `Bool 필드 검색 예제`(){
@@ -1504,5 +1523,207 @@ Sort.by("name.keyword")
 └── No (동적 정렬 필요)
     ├── 단순 조회 → Repository + Sort 파라미터
     └── 복잡한 쿼리와 함께 → ElasticsearchOperations + withSort()
+```
+
+# 11. Pagination을 사용한 페이징 예제
+
+```kotlin
+// src/main/kotlin/com/example/demo/products/repositories/ProductRepository.kt
+// 페이징 관련 메서드
+fun findAllBy(pageable: Pageable): Page<Product>
+fun findByAvailable(available: Boolean, pageable: Pageable): Page<Product>
+```
+
+```kotlin
+// src/test/kotlin/com/example/demo/ElasticsearchQueryTests.kt
+@Test
+fun `Pagination을 사용한 페이징 예제`() {
+    println("=== ElasticsearchRepository를 사용한 페이징 ===")
+
+    println("1. 기본 페이징 (첫 번째 페이지, 2개씩)")
+    val page0 = productRepository.findAllBy(PageRequest.of(0, 2))
+    assertEquals(2, page0.content.size)
+    assertEquals(5, page0.totalElements)
+    assertEquals(3, page0.totalPages)
+    assertEquals(0, page0.number)
+    assertEquals(true, page0.hasNext())
+
+    println("2. 두 번째 페이지")
+    val page1 = productRepository.findAllBy(PageRequest.of(1, 2))
+    assertEquals(2, page1.content.size)
+    assertEquals(1, page1.number)
+
+    println("3. 마지막 페이지")
+    val page2 = productRepository.findAllBy(PageRequest.of(2, 2))
+    assertEquals(1, page2.content.size)
+    assertEquals(false, page2.hasNext())
+
+    println("4. 페이징 + 정렬 (가격 오름차순)")
+    val pageWithSort = productRepository.findAllBy(
+        PageRequest.of(0, 2, Sort.by(Sort.Direction.ASC, "price"))
+    )
+    assertEquals(299, pageWithSort.content.first().price)
+
+    println("5. 조건 + 페이징 (available=true)")
+    val pageWithCondition = productRepository.findByAvailable(true, PageRequest.of(0, 2))
+    assertEquals(2, pageWithCondition.content.size)
+
+    println("\n=== ElasticsearchOperations를 사용한 페이징 ===")
+
+    println("1. 기본 페이징 (첫 번째 페이지, 2개씩)")
+    val page0Query = elasticsearchOperations.search(
+        NativeQueryBuilder()
+            .withQuery { q -> q.matchAll { it } }
+            .withPageable(PageRequest.of(0, 2))
+            .build(),
+        Product::class.java
+    )
+    assertEquals(2, page0Query.searchHits.size)
+    assertEquals(5, page0Query.totalHits)
+
+    println("4. 페이징 + 정렬 (가격 오름차순)")
+    val pageWithSortQuery = elasticsearchOperations.search(
+        NativeQueryBuilder()
+            .withQuery { q -> q.matchAll { it } }
+            .withPageable(PageRequest.of(0, 2, Sort.by(Sort.Direction.ASC, "price")))
+            .build(),
+        Product::class.java
+    )
+
+    println("5. 조건 + 페이징 (available=true)")
+    val pageWithConditionQuery = elasticsearchOperations.search(
+        NativeQueryBuilder()
+            .withQuery { q -> q.term { t -> t.field("available").value(true) } }
+            .withPageable(PageRequest.of(0, 2))
+            .build(),
+        Product::class.java
+    )
+    assertEquals(5, pageWithConditionQuery.totalHits)
+}
+```
+
+### 페이징 방법 비교
+
+#### 1. ElasticsearchRepository - Pageable 파라미터 방식
+
+`Pageable` 객체를 파라미터로 받아 페이징을 수행합니다. 반환 타입은 `Page<T>`입니다.
+
+```kotlin
+// Repository 정의
+fun findAllBy(pageable: Pageable): Page<Product>
+fun findByAvailable(available: Boolean, pageable: Pageable): Page<Product>
+
+// 사용 예시
+val page = productRepository.findAllBy(PageRequest.of(0, 10))
+```
+
+#### 2. ElasticsearchOperations - withPageable 방식
+
+`NativeQueryBuilder`의 `withPageable()` 메서드를 사용합니다.
+
+```kotlin
+val query = NativeQueryBuilder()
+    .withQuery { q -> q.matchAll { it } }
+    .withPageable(PageRequest.of(0, 10))
+    .build()
+
+val results = elasticsearchOperations.search(query, Product::class.java)
+```
+
+### PageRequest 생성 방법
+
+```kotlin
+// 기본 페이징 (페이지 번호, 페이지 크기)
+PageRequest.of(0, 10)  // 첫 번째 페이지, 10개씩
+
+// 페이징 + 정렬
+PageRequest.of(0, 10, Sort.by(Sort.Direction.ASC, "price"))
+
+// 페이징 + 복합 정렬
+PageRequest.of(0, 10, Sort.by(Sort.Direction.ASC, "category")
+    .and(Sort.by(Sort.Direction.DESC, "price")))
+```
+
+### Page 객체의 주요 속성
+
+| 속성/메서드 | 설명 | 예시 값 |
+|-----------|-----|--------|
+| `content` | 현재 페이지의 데이터 목록 | `List<Product>` |
+| `totalElements` | 전체 문서 수 | `100` |
+| `totalPages` | 전체 페이지 수 | `10` |
+| `number` | 현재 페이지 번호 (0부터 시작) | `0` |
+| `size` | 페이지 크기 | `10` |
+| `hasNext()` | 다음 페이지 존재 여부 | `true` |
+| `hasPrevious()` | 이전 페이지 존재 여부 | `false` |
+| `isFirst()` | 첫 번째 페이지 여부 | `true` |
+| `isLast()` | 마지막 페이지 여부 | `false` |
+
+### ElasticsearchOperations 페이징 결과
+
+`ElasticsearchOperations`의 `search()` 메서드는 `SearchHits<T>`를 반환합니다.
+
+```kotlin
+val results = elasticsearchOperations.search(query, Product::class.java)
+
+// 주요 속성
+results.totalHits        // 전체 문서 수 (Long)
+results.searchHits       // 현재 페이지의 SearchHit 목록
+results.searchHits.size  // 현재 페이지의 문서 수
+```
+
+> **참고**: `SearchHits`는 `Page`와 달리 `totalPages`, `hasNext()` 등의 메서드가 없습니다. 필요하다면 직접 계산해야 합니다.
+
+```kotlin
+// 전체 페이지 수 계산
+val totalPages = (results.totalHits + pageSize - 1) / pageSize
+
+// 다음 페이지 존재 여부
+val hasNext = (currentPage + 1) * pageSize < results.totalHits
+```
+
+### 페이징 성능 주의사항
+
+#### Deep Pagination 문제
+
+Elasticsearch는 기본적으로 `from + size`가 **10,000**을 초과할 수 없습니다.
+
+```kotlin
+// ❌ 에러 발생: from + size > 10,000
+PageRequest.of(1000, 10)  // from = 10,000
+
+// ✅ 해결 방법 1: index.max_result_window 설정 증가 (비권장)
+// ✅ 해결 방법 2: Search After 사용 (권장)
+// ✅ 해결 방법 3: Scroll API 사용 (대량 데이터 처리 시)
+```
+
+#### Search After (권장)
+
+대량의 페이징이 필요한 경우 `search_after`를 사용합니다.
+
+```kotlin
+// 첫 번째 페이지
+val firstPage = elasticsearchOperations.search(
+    NativeQueryBuilder()
+        .withQuery { q -> q.matchAll { it } }
+        .withSort(Sort.by(Sort.Direction.ASC, "price"))
+        .withPageable(PageRequest.of(0, 10))
+        .build(),
+    Product::class.java
+)
+
+// 마지막 문서의 sort 값을 가져와서 다음 페이지 조회
+val lastHit = firstPage.searchHits.last()
+val sortValues = lastHit.sortValues  // 다음 페이지 조회 시 사용
+```
+
+### 페이징 선택 가이드
+
+```
+페이징이 필요한가?
+├── 단순 CRUD + 페이징 → Repository + Pageable
+├── 복잡한 쿼리 + 페이징 → ElasticsearchOperations + withPageable
+└── 대량 데이터 (10,000건 초과)
+    ├── 실시간 페이징 → Search After
+    └── 배치 처리 → Scroll API
 ```
 
