@@ -778,3 +778,576 @@ q.term { t -> t.field("price").value(899.99) }  // 실패 가능!
     └── range (gte, lte, gt, lt)
     
 ```
+9. DateField를 사용한 검색 예제
+```kotlin
+// src/main/kotlin/com/example/demo/products/repositories/ElasticsearchQueryTests.kt
+@Test
+fun `Date 필드 검색 예제`(){
+	println("ElasticsearchRepository 를 사용한 검색")
+
+	println("1. 생성일자가 3일 이내인 문서 검색")
+	val recentProducts = productRepository.findByCreatedAtAfter(LocalDateTime.now().minusDays(3))
+	recentProducts.forEach {
+		println("${it.name} - ${it.createdAt}")
+	}
+	assert(recentProducts.size == 2)
+
+	println("2. 생성일자가 5일 이전인 문서 검색")
+	val olderProducts = productRepository.findByCreatedAtBefore(LocalDateTime.now().minusDays(5))
+	olderProducts.forEach {
+		println("${it.name} - ${it.createdAt}")
+	}
+	assert(olderProducts.size == 1)
+
+	println("3. 생성시간이 12시간 에서 36시간 사이인 문서 검색")
+	val betweenProducts = productRepository.findByCreatedAtBetween(
+		LocalDateTime.now().minusHours(36),
+		LocalDateTime.now().minusHours(12)
+	)
+	betweenProducts.forEach {
+		println("${it.name} - ${it.createdAt}")
+	}
+	assert(betweenProducts.size == 1)
+
+	println("ElasticsearchOperations 를 사용한 검색")
+	println("1. 생성일자가 3일 이내인 문서 검색(DateMath사용)")
+	val recentProductsQuery = elasticsearchOperations.search(
+		NativeQueryBuilder().withQuery { q ->
+			q.range { r ->
+				r.date{d->
+					d.field("createdAt")
+						.gte("now-3d"
+						)
+				}
+			}
+		}.build(),
+		Product::class.java
+	)
+	recentProductsQuery.forEach {
+		println("${it.content.name} - ${it.content.createdAt}")
+	}
+	assertEquals(
+		recentProducts.map { it.id },
+		recentProductsQuery.searchHits.map{it.content.id}
+	)
+
+	println("2. 생성일자가 5일 이전인 문서 검색(Formatter로 정확한 날짜 지정)")
+	val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
+	val olderProductsQuery = elasticsearchOperations.search(
+		NativeQueryBuilder().withQuery { q ->
+			q.range { r ->
+				r.date { d->
+					d.field("createdAt")
+						.lte(LocalDateTime.now().minusDays(5).format(formatter))
+
+				}
+			}
+		}.build(),
+		Product::class.java
+	)
+	olderProductsQuery.forEach {
+		println("${it.content.name} - ${it.content.createdAt}")
+	}
+	assertEquals(
+		olderProducts.map { it.id },
+		olderProductsQuery.searchHits.map{it.content.id}
+	)
+
+
+	println("3. 생성시간이 12시간 에서 36시간 사이인 문서 검색")
+	val betweenProductsQuery = elasticsearchOperations.search(
+		NativeQueryBuilder().withQuery { q ->
+			q.range { r ->
+				r.date { d->
+					d.field("createdAt")
+						.gte("now-36h")
+						.lte("now-12h")
+				}
+			}
+		}.build(),
+		Product::class.java
+	)
+	betweenProductsQuery.forEach {
+		println("${it.content.name} - ${it.content.createdAt}")
+	}
+	assertEquals(
+		betweenProducts.map { it.id },
+		betweenProductsQuery.searchHits.map{it.content.id}
+	)
+}
+```
+
+### Date 필드에서 사용하는 쿼리
+
+Date 필드는 **range 쿼리**를 주로 사용하며, Elasticsearch의 **Date Math** 표현식을 활용할 수 있습니다.
+
+#### Date 필드 검색 방법
+
+| 방법 | 설명 | 예시 |
+|-----|-----|-----|
+| **Date Math** | 상대적 시간 표현 | `"now-3d"`, `"now-12h"` |
+| **Formatter** | 정확한 날짜/시간 지정 | `"2024-01-15T10:30:00"` |
+
+### Date Math 표현식
+
+Elasticsearch는 **현재 시간(now)**을 기준으로 상대적인 날짜를 표현할 수 있습니다.
+
+#### 기본 문법
+
+```
+now[+-][숫자][단위]
+```
+
+#### 지원하는 시간 단위
+
+| 단위 | 의미 | 예시 |
+|-----|-----|-----|
+| `y` | 년 (year) | `now-1y` (1년 전) |
+| `M` | 월 (month) | `now-3M` (3개월 전) |
+| `w` | 주 (week) | `now-2w` (2주 전) |
+| `d` | 일 (day) | `now-7d` (7일 전) |
+| `h` | 시간 (hour) | `now-12h` (12시간 전) |
+| `m` | 분 (minute) | `now-30m` (30분 전) |
+| `s` | 초 (second) | `now-60s` (60초 전) |
+
+#### Date Math 예시
+
+```kotlin
+// 최근 3일 이내 문서
+q.range { r ->
+    r.date { d -> d.field("createdAt").gte("now-3d") }
+}
+
+// 최근 12시간 ~ 36시간 사이 문서
+q.range { r ->
+    r.date { d -> d.field("createdAt").gte("now-36h").lte("now-12h") }
+}
+
+// 이번 달 시작부터 현재까지
+q.range { r ->
+    r.date { d -> d.field("createdAt").gte("now/M") }  // now/M = 이번 달 1일 00:00:00
+}
+```
+
+#### 반올림(Rounding) 표현
+
+`/` 를 사용하면 해당 단위의 시작점으로 반올림합니다.
+
+| 표현 | 의미 |
+|-----|-----|
+| `now/d` | 오늘 00:00:00 |
+| `now/M` | 이번 달 1일 00:00:00 |
+| `now/y` | 올해 1월 1일 00:00:00 |
+
+```kotlin
+// 오늘 자정부터 현재까지
+q.range { r ->
+    r.date { d -> d.field("createdAt").gte("now/d") }
+}
+
+// 어제 하루 동안 (00:00:00 ~ 23:59:59)
+q.range { r ->
+    r.date { d -> d.field("createdAt").gte("now-1d/d").lt("now/d") }
+}
+```
+
+### 정확한 날짜 지정 (Formatter 사용)
+
+Date Math 대신 정확한 날짜/시간을 지정할 수도 있습니다.
+
+```kotlin
+val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
+
+// 특정 날짜 이후 문서 검색
+val query = NativeQueryBuilder().withQuery { q ->
+    q.range { r ->
+        r.date { d ->
+            d.field("createdAt")
+                .gte(LocalDateTime.of(2024, 1, 1, 0, 0, 0).format(formatter))
+                .lte(LocalDateTime.now().format(formatter))
+        }
+    }
+}.build()
+```
+
+#### ⚠️ 날짜 포맷 주의사항
+
+Document에 정의된 `@Field`의 `format`과 쿼리에서 사용하는 포맷이 일치해야 합니다.
+
+```kotlin
+// Document 정의
+@Field(type = FieldType.Date, format = [DateFormat.date_hour_minute_second])
+val createdAt: LocalDateTime
+
+// 쿼리 시 포맷 (date_hour_minute_second = yyyy-MM-dd'T'HH:mm:ss)
+val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
+```
+
+### Date Math vs Formatter 선택 가이드
+
+| 상황 | 권장 방법 | 예시 |
+|-----|---------|-----|
+| 상대적 시간 (최근 N일) | Date Math | `"now-7d"` |
+| 특정 날짜/시간 | Formatter | `"2024-01-15T10:30:00"` |
+| 배치 작업 (고정된 기간) | Formatter | 정확한 시작/종료 시간 |
+| 실시간 대시보드 | Date Math | `"now-1h"`, `"now/d"` |
+
+### Date 필드 쿼리 선택 가이드
+
+```
+날짜/시간을 검색하려는가?
+├── 범위 검색 → range 쿼리
+│   ├── 상대적 시간 (최근 N일) → Date Math ("now-3d")
+│   └── 정확한 날짜 → Formatter 사용
+└── 정확한 날짜 매칭 → term 쿼리 (비권장, 초 단위까지 정확히 일치해야 함)
+```
+
+# 9. BooleanField를 사용한 검색 예제
+```kotlin
+// src/main/kotlin/com/example/demo/products/repositories/ElasticsearchQueryTests.kt
+fun `Bool 필드 검색 예제`(){
+	println("ElasticsearchRepository 를 사용한 검색")
+
+	println("1.판매 가능한 문서 검색")
+	val availableProducts = productRepository.findByAvailable(true)
+	availableProducts.forEach {
+		println("${it.name} - ${it.stock} - ${it.available}")
+	}
+	assert(availableProducts.size == 3)
+
+	println("2. 판매 불가능한 문서 검색")
+	val unavailableProducts = productRepository.findByAvailable(false)
+	unavailableProducts.forEach {
+		println("${it.name} - ${it.stock} - ${it.available}")
+	}
+	assert(unavailableProducts.isEmpty())
+
+	println("ElasticsearchOperations 를 사용한 검색")
+
+	println("1. 재고가 100개 이상이고 판매 가능한 문서 검색")
+	val availableProductsQuery = elasticsearchOperations.search(
+		NativeQueryBuilder().withQuery { q ->
+			q.bool { b ->
+				b.must { m -> m.term { t -> t.field("available").value(true) } }
+			}
+		}.build(),
+		Product::class.java
+	)
+	availableProductsQuery.forEach {
+		println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+	}
+	assertEquals(
+		availableProducts.map { it.id },
+		availableProductsQuery.searchHits.map{it.content.id}
+	)
+
+	println("2. 판매 불가능한 문서 검색")
+	val unavailableProductsQuery = elasticsearchOperations.search(
+		NativeQueryBuilder().withQuery { q ->
+			q.bool { b ->
+				b.mustNot { m -> m.term { t -> t.field("available").value(true) } }
+			}
+		}.build(),
+		Product::class.java
+	)
+	unavailableProductsQuery.forEach {
+		println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+	}
+	assertEquals(
+		unavailableProducts.map { it.id },
+		unavailableProductsQuery.searchHits.map{it.content.id}
+	)
+	println("3. 그외의 조합으로 판매가능한 문서 검색")
+
+	println("3-1, filter 절에 match 쿼리 사용")
+	val availableProductsQueryWithFilterMatch = elasticsearchOperations.search(
+		NativeQueryBuilder().withQuery { q ->
+			q.bool { b ->
+				b.filter { f -> f.match { t -> t.field("available").query(true) } }
+			}
+		}.build(),
+		Product::class.java
+	)
+	availableProductsQueryWithFilterMatch.forEach {
+		println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+	}
+	assertEquals(
+		availableProducts.map { it.id },
+		availableProductsQueryWithFilterMatch.searchHits.map{it.content.id}
+	)
+	println("3-2 , filter 절에 term 쿼리 사용")
+	val availableProductsQueryWithFilterTerm = elasticsearchOperations.search(
+		NativeQueryBuilder().withQuery { q ->
+			q.bool { b ->
+				b.filter { f -> f.term { t -> t.field("available").value(true) } }
+			}
+		}.build(),
+		Product::class.java
+	)
+	availableProductsQueryWithFilterTerm.forEach {
+		println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+	}
+	assertEquals(
+		availableProducts.map { it.id },
+		availableProductsQueryWithFilterTerm.searchHits.map{it.content.id}
+	)
+	println("3-3 , must 절에 match 쿼리 사용")
+	val availableProductsQueryWithMustMatch = elasticsearchOperations.search(
+		NativeQueryBuilder().withQuery { q ->
+			q.bool { b ->
+				b.must { m -> m.match { t -> t.field("available").query(true) } }
+			}
+		}.build(),
+		Product::class.java
+	)
+	availableProductsQueryWithMustMatch.forEach {
+		println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+	}
+	assertEquals(
+		availableProducts.map { it.id },
+		availableProductsQueryWithMustMatch.searchHits.map{it.content.id}
+	)
+
+	println("4. 그외의 필드에 대해서도 Bool 쿼리 작성 가능")
+	println("4-1, 900 이상인 상품을 검색하되, 카테고리가 Computers인 상품을 우선 정렬")
+	val complexBoolQuery = elasticsearchOperations.search(
+		NativeQueryBuilder().withQuery { q ->
+			q.bool { b ->
+				b.must { m -> m.range { r -> r.number { n->n.field("price").gte(950.0) }} }
+				b.should { m -> m.match { mt->mt.field("category").query("Computers") } }
+			}
+		}.build(),
+		Product::class.java
+	)
+	complexBoolQuery.forEach {
+		println("${it.content.name} - ${it.content.stock} - ${it.content.price}")
+	}
+	assertEquals(complexBoolQuery.searchHits.count(),2)
+	assertEquals(complexBoolQuery.searchHits.first().content.category,"Computers")
+	assertEquals(complexBoolQuery.searchHits.last().content.category,"Electronics")
+}
+```
+
+### Boolean 필드에서 사용하는 쿼리
+
+Boolean 필드는 `true` 또는 `false` 값만 가지며, **term 쿼리**로 검색합니다.
+
+```kotlin
+// 판매 가능한 상품 검색 (available = true)
+val query = NativeQueryBuilder().withQuery { q ->
+    q.term { t -> t.field("available").value(true) }
+}.build()
+```
+
+### Bool 쿼리 이해하기
+
+`bool` 쿼리는 여러 조건을 조합할 때 사용하는 **복합 쿼리**입니다.
+
+#### Bool 쿼리 구성 요소
+
+| 절 | 의미 | 필수 여부 | 스코어 영향 | SQL 비유 |
+|---|-----|---------|---------|---------|
+| **must** | 반드시 일치 | ✅ 필수 | ✅ 있음 | `AND` |
+| **filter** | 반드시 일치 | ✅ 필수 | ❌ 없음 (캐싱됨) | `AND` |
+| **should** | 하나 이상 일치 | ❌ 선택 | ✅ 있음 | `OR` 또는 스코어 부스팅 |
+| **mustNot** | 일치하면 제외 | - | ❌ 없음 | `NOT` |
+
+#### must: 필수 조건 (AND)
+
+모든 `must` 조건을 만족해야 결과에 포함됩니다.
+
+```kotlin
+// name에 "Apple" 포함 AND price <= 1000
+q.bool { b ->
+    b.must { m -> m.match { it.field("name").query("Apple") } }
+    b.must { m -> m.range { r -> r.number { n -> n.field("price").lte(1000.0) } } }
+}
+```
+
+#### filter: 필수 조건 (AND, 스코어 무시)
+
+`must`와 동일하게 필수 조건이지만, **스코어 계산을 하지 않고 캐싱**됩니다.
+
+```kotlin
+// 판매 가능하고 가격이 1000 이하인 상품 (필터링만)
+q.bool { b ->
+    b.filter { f -> f.term { t -> t.field("available").value(true) } }
+    b.filter { f -> f.range { r -> r.number { n -> n.field("price").lte(1000.0) } } }
+}
+```
+
+#### should: 선택 조건 (OR 또는 스코어 부스팅)
+
+`should`는 상황에 따라 다르게 동작합니다.
+
+**1. must/filter 없이 should만 있을 때 → OR 조건**
+
+```kotlin
+// "Apple" 또는 "Samsung" 포함된 문서 검색
+q.bool { b ->
+    b.should { s -> s.match { it.field("name").query("Apple") } }
+    b.should { s -> s.match { it.field("name").query("Samsung") } }
+}
+// 결과: 둘 중 하나라도 포함되면 반환
+```
+
+**2. must/filter와 함께 있을 때 → 스코어 부스팅**
+
+```kotlin
+// 반드시 available=true (필수), "Apple" 포함되면 스코어 높임 (선택)
+q.bool { b ->
+    b.must { m -> m.term { t -> t.field("available").value(true) } }
+    b.should { s -> s.match { it.field("name").query("Apple") } }
+}
+// 결과: 모든 available=true 문서 반환, Apple 포함 문서가 상위에 정렬
+```
+
+#### mustNot: 제외 조건 (NOT)
+
+해당 조건에 일치하는 문서를 **결과에서 제외**합니다.
+
+```kotlin
+// 판매 불가능한 상품 검색 (available = true인 문서 제외)
+q.bool { b ->
+    b.mustNot { m -> m.term { t -> t.field("available").value(true) } }
+}
+```
+
+> **참고**: `term(false)`와 `mustNot(term(true))`는 비슷하지만, `mustNot`은 필드가 없는 문서도 포함할 수 있습니다.
+
+### Bool 쿼리 예시로 비교
+
+```
+데이터:
+- Apple iPhone 13 (price: 999)
+- Samsung Galaxy S21 (price: 899)  
+- Apple MacBook Pro (price: 1999)
+
+쿼리1: must(Apple) AND must(price <= 1000)
+→ 결과: Apple iPhone 13 (1건)
+
+쿼리2: should(Apple) OR should(Samsung)
+→ 결과: Apple iPhone, Samsung Galaxy, Apple MacBook (3건)
+
+쿼리3: must(price <= 1000) + should(Apple)
+→ 결과: Apple iPhone (score 높음), Samsung Galaxy (score 낮음) (2건)
+        Apple이 포함된 문서가 상위에 정렬됨
+```
+
+### 관련성 점수(Relevance Score)
+
+Elasticsearch는 검색 결과를 반환할 때 각 문서에 **_score** 값을 부여합니다.
+
+```kotlin
+val results = elasticsearchOperations.search(query, Product::class.java)
+results.forEach {
+    println("${it.content.name} - score: ${it.score}")
+}
+```
+
+#### 스코어 계산 방식
+
+| 요소 | 설명 | 예시 |
+|-----|-----|-----|
+| **TF (Term Frequency)** | 검색어가 문서에 많이 등장할수록 점수 ↑ | "iPhone"이 3번 등장 > 1번 등장 |
+| **IDF (Inverse Document Frequency)** | 검색어가 전체 문서에서 희귀할수록 점수 ↑ | "iPhone"보다 "iPhone15ProMax"가 더 희귀 |
+| **Field Length** | 필드가 짧을수록 점수 ↑ | 제목에서 매칭 > 본문에서 매칭 |
+
+```
+"iPhone" 검색 예시:
+문서1: "iPhone 15 Pro"           → score: 2.5 (짧은 제목)
+문서2: "iPhone 케이스 모음"        → score: 1.8 
+문서3: "스마트폰 악세서리 iPhone용" → score: 1.2 (긴 제목)
+```
+
+### must vs filter: 언제 무엇을 쓸까?
+
+| 절 | 스코어 계산 | 캐싱 | 사용 시점 |
+|---|----------|-----|---------|
+| **must** | ✅ 계산함 | ❌ 안됨 | 검색어와의 관련성이 중요할 때 |
+| **filter** | ❌ 안함 | ✅ 됨 | Yes/No 필터링만 필요할 때 |
+
+#### 쿼리 타입별 스코어 비교
+
+| 조합 | 스코어 계산 | 스코어 특징 |
+|-----|----------|----------|
+| `must` + `match` | ✅ 함 | TF-IDF 기반, 관련성에 따라 다양한 점수 |
+| `must` + `term` | ✅ 함 | 일치하면 고정 점수 (보통 1.0 내외) |
+| `filter` + `term` | ❌ 안함 | 항상 0, 필터링만 수행 |
+
+> **결론**: `term` 쿼리처럼 Yes/No 판단만 필요한 경우, `must` 대신 `filter`를 사용하면 불필요한 스코어 계산을 생략하고 캐싱 효과도 얻을 수 있습니다.
+
+### Filter 캐싱 방식
+
+`filter`는 **Elasticsearch 서버 내부**에서 **Bitset 캐싱**을 사용합니다.
+
+> Java Client는 쿼리를 전송만 하고, 캐싱은 **Elasticsearch 노드의 메모리**에서 이루어집니다.
+
+**동작 원리:**
+1. `filter` 조건을 처음 실행하면 Elasticsearch가 조건에 일치하는 문서 ID를 **Bitset**(비트 배열)으로 **노드 메모리에 저장**
+2. 동일한 `filter` 조건이 다시 실행되면 캐시된 Bitset을 재사용
+3. 인덱스에 새 문서가 추가되면 해당 부분만 업데이트
+
+```
+예: filter { term { field("available").value(true) } }
+
+첫 번째 요청 (Java Client → Elasticsearch):
+┌─────────────────────────────────────────────────────────┐
+│ Elasticsearch 노드 메모리                                │
+│ ┌─────────────────────────────────────────┐             │
+│ │ 문서ID:  1   2   3   4   5   6   7   8  │             │
+│ │ Bitset: [1] [1] [0] [1] [0] [1] [1] [0] │ ← 캐시 저장  │
+│ └─────────────────────────────────────────┘             │
+└─────────────────────────────────────────────────────────┘
+
+두 번째 요청:
+→ Elasticsearch가 캐시 히트! 다시 계산하지 않고 바로 응답
+```
+
+**캐싱되는 조건:**
+- `term`, `terms`, `range`, `exists` 등 자주 사용되는 필터
+- 세그먼트 단위로 캐싱 (세그먼트가 변경되지 않으면 캐시 유지)
+
+**캐싱되지 않는 경우:**
+- 작은 세그먼트 (문서 10,000개 미만 또는 전체의 3% 미만)
+- `script` 쿼리 등 동적 쿼리
+
+### Bool 쿼리 실전 예시
+
+```kotlin
+// 복합 조건: 
+// - 이름에 "iPhone" 포함 (must) → 스코어에 반영
+// - 판매 가능 (filter) → 필터링만
+// - 가격 1000 이하 (filter) → 필터링만
+// - 품절 상품 제외 (mustNot)
+// - "Pro" 포함시 상위 정렬 (should) → 스코어 부스팅
+val query = NativeQueryBuilder().withQuery { q ->
+    q.bool { b ->
+        b.must { m -> m.match { it.field("name").query("iPhone") } }
+        b.filter { f -> f.term { t -> t.field("available").value(true) } }
+        b.filter { f -> f.range { r -> r.number { n -> n.field("price").lte(1000.0) } } }
+        b.mustNot { m -> m.term { t -> t.field("stock").value(0) } }
+        b.should { s -> s.match { it.field("name").query("Pro") } }
+    }
+}.build()
+```
+
+자연어로 표현하면:
+> **"이름에 iPhone이 포함되고, 판매 가능하며, 가격이 1000 이하이고, 품절이 아닌 상품을 검색하되, Pro가 포함된 상품을 우선 정렬"**
+
+### Bool 쿼리 선택 가이드
+
+```
+조건을 어떻게 조합할까?
+│
+├── 필수 조건인가?
+│   ├── Yes + 스코어 필요 → must
+│   └── Yes + 필터링만 → filter (성능 좋음)
+│
+├── 선택 조건인가? (있으면 좋고, 없어도 됨)
+│   └── should (스코어 부스팅)
+│
+└── 제외 조건인가?
+    └── mustNot
+```
+

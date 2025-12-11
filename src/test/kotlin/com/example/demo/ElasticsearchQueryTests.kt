@@ -12,11 +12,16 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestMethodOrder
 import org.junit.jupiter.api.assertNotNull
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.autoconfigure.web.format.DateTimeFormatters
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.data.elasticsearch.client.elc.NativeQuery
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations
 import java.time.LocalDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.temporal.TemporalUnit
+import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
 
 @SpringBootTest
@@ -37,7 +42,7 @@ class ElasticsearchQueryTests {
                 price = 999,
                 category = "Electronics",
                 stock = 100,
-                createdAt = LocalDateTime.now(),
+                createdAt = LocalDateTime.now().minusDays(1 ),
                 available = true
             ),
             Product(
@@ -46,7 +51,7 @@ class ElasticsearchQueryTests {
                 price = 899,
                 category = "Electronics",
                 stock = 150,
-                createdAt = LocalDateTime.now(),
+                createdAt = LocalDateTime.now().minusWeeks(1),
                 available = true
             ),
             Product(
@@ -293,5 +298,222 @@ class ElasticsearchQueryTests {
 			price899or1999ProductsQuery.searchHits.map{it.content.id}
 		)
 
+	}
+	@Test
+	fun `Date 필드 검색 예제`(){
+		println("ElasticsearchRepository 를 사용한 검색")
+
+		println("1. 생성일자가 3일 이내인 문서 검색")
+		val recentProducts = productRepository.findByCreatedAtAfter(LocalDateTime.now().minusDays(3))
+		recentProducts.forEach {
+			println("${it.name} - ${it.createdAt}")
+		}
+		assert(recentProducts.size == 2)
+
+		println("2. 생성일자가 5일 이전인 문서 검색")
+		val olderProducts = productRepository.findByCreatedAtBefore(LocalDateTime.now().minusDays(5))
+		olderProducts.forEach {
+			println("${it.name} - ${it.createdAt}")
+		}
+		assert(olderProducts.size == 1)
+
+		println("3. 생성시간이 12시간 에서 36시간 사이인 문서 검색")
+		val betweenProducts = productRepository.findByCreatedAtBetween(
+			LocalDateTime.now().minusHours(36),
+			LocalDateTime.now().minusHours(12)
+		)
+		betweenProducts.forEach {
+			println("${it.name} - ${it.createdAt}")
+		}
+		assert(betweenProducts.size == 1)
+
+		println("ElasticsearchOperations 를 사용한 검색")
+		println("1. 생성일자가 3일 이내인 문서 검색(DateMath사용)")
+		val recentProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.range { r ->
+					r.date{d->
+						d.field("createdAt")
+							.gte("now-3d"
+							)
+					}
+				}
+			}.build(),
+			Product::class.java
+		)
+		recentProductsQuery.forEach {
+			println("${it.content.name} - ${it.content.createdAt}")
+		}
+		assertEquals(
+			recentProducts.map { it.id },
+			recentProductsQuery.searchHits.map{it.content.id}
+		)
+
+		println("2. 생성일자가 5일 이전인 문서 검색(Formatter로 정확한 날짜 지정)")
+		val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
+		val olderProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.range { r ->
+					r.date { d->
+						d.field("createdAt")
+							.lte(LocalDateTime.now().minusDays(5).format(formatter))
+
+					}
+				}
+			}.build(),
+			Product::class.java
+		)
+		olderProductsQuery.forEach {
+			println("${it.content.name} - ${it.content.createdAt}")
+		}
+		assertEquals(
+			olderProducts.map { it.id },
+			olderProductsQuery.searchHits.map{it.content.id}
+		)
+
+
+		println("3. 생성시간이 12시간 에서 36시간 사이인 문서 검색")
+		val betweenProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.range { r ->
+					r.date { d->
+						d.field("createdAt")
+							.gte("now-36h")
+							.lte("now-12h")
+					}
+				}
+			}.build(),
+			Product::class.java
+		)
+		betweenProductsQuery.forEach {
+			println("${it.content.name} - ${it.content.createdAt}")
+		}
+		assertEquals(
+			betweenProducts.map { it.id },
+			betweenProductsQuery.searchHits.map{it.content.id}
+		)
+	}
+
+	@Test
+	fun `Bool 필드 검색 예제`(){
+		println("ElasticsearchRepository 를 사용한 검색")
+
+		println("1.판매 가능한 문서 검색")
+		val availableProducts = productRepository.findByAvailable(true)
+		availableProducts.forEach {
+			println("${it.name} - ${it.stock} - ${it.available}")
+		}
+		assert(availableProducts.size == 3)
+
+		println("2. 판매 불가능한 문서 검색")
+		val unavailableProducts = productRepository.findByAvailable(false)
+		unavailableProducts.forEach {
+			println("${it.name} - ${it.stock} - ${it.available}")
+		}
+		assert(unavailableProducts.isEmpty())
+
+		println("ElasticsearchOperations 를 사용한 검색")
+
+		println("1. 재고가 100개 이상이고 판매 가능한 문서 검색")
+		val availableProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.bool { b ->
+					b.must { m -> m.term { t -> t.field("available").value(true) } }
+				}
+			}.build(),
+			Product::class.java
+		)
+		availableProductsQuery.forEach {
+			println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+		}
+		assertEquals(
+			availableProducts.map { it.id },
+			availableProductsQuery.searchHits.map{it.content.id}
+		)
+
+		println("2. 판매 불가능한 문서 검색")
+		val unavailableProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.bool { b ->
+					b.mustNot { m -> m.term { t -> t.field("available").value(true) } }
+				}
+			}.build(),
+			Product::class.java
+		)
+		unavailableProductsQuery.forEach {
+			println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+		}
+		assertEquals(
+			unavailableProducts.map { it.id },
+			unavailableProductsQuery.searchHits.map{it.content.id}
+		)
+		println("3. 그외의 조합으로 판매가능한 문서 검색")
+
+		println("3-1, filter 절에 match 쿼리 사용")
+		val availableProductsQueryWithFilterMatch = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.bool { b ->
+					b.filter { f -> f.match { t -> t.field("available").query(true) } }
+				}
+			}.build(),
+			Product::class.java
+		)
+		availableProductsQueryWithFilterMatch.forEach {
+			println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+		}
+		assertEquals(
+			availableProducts.map { it.id },
+			availableProductsQueryWithFilterMatch.searchHits.map{it.content.id}
+		)
+		println("3-2 , filter 절에 term 쿼리 사용")
+		val availableProductsQueryWithFilterTerm = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.bool { b ->
+					b.filter { f -> f.term { t -> t.field("available").value(true) } }
+				}
+			}.build(),
+			Product::class.java
+		)
+		availableProductsQueryWithFilterTerm.forEach {
+			println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+		}
+		assertEquals(
+			availableProducts.map { it.id },
+			availableProductsQueryWithFilterTerm.searchHits.map{it.content.id}
+		)
+		println("3-3 , must 절에 match 쿼리 사용")
+		val availableProductsQueryWithMustMatch = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.bool { b ->
+					b.must { m -> m.match { t -> t.field("available").query(true) } }
+				}
+			}.build(),
+			Product::class.java
+		)
+		availableProductsQueryWithMustMatch.forEach {
+			println("${it.content.name} - ${it.content.stock} - ${it.content.available}")
+		}
+		assertEquals(
+			availableProducts.map { it.id },
+			availableProductsQueryWithMustMatch.searchHits.map{it.content.id}
+		)
+
+		println("4. 그외의 필드에 대해서도 Bool 쿼리 작성 가능")
+		println("4-1, 900 이상인 상품을 검색하되, 카테고리가 Computers인 상품을 우선 정렬")
+		val complexBoolQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.bool { b ->
+					b.must { m -> m.range { r -> r.number { n->n.field("price").gte(950.0) }} }
+					b.should { m -> m.match { mt->mt.field("category").query("Computers") } }
+				}
+			}.build(),
+			Product::class.java
+		)
+		complexBoolQuery.forEach {
+			println("${it.content.name} - ${it.content.stock} - ${it.content.price}")
+		}
+		assertEquals(complexBoolQuery.searchHits.count(),2)
+		assertEquals(complexBoolQuery.searchHits.first().content.category,"Computers")
+		assertEquals(complexBoolQuery.searchHits.last().content.category,"Electronics")
 	}
 }
