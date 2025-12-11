@@ -1,6 +1,9 @@
 package com.example.demo
 
 import co.elastic.clients.elasticsearch._types.FieldValue
+import co.elastic.clients.elasticsearch._types.aggregations.Aggregation
+import co.elastic.clients.elasticsearch._types.aggregations.AggregationRange
+import co.elastic.clients.elasticsearch._types.aggregations.CalendarInterval
 import co.elastic.clients.elasticsearch._types.query_dsl.RangeQuery
 import co.elastic.clients.elasticsearch._types.query_dsl.RangeQueryBuilders
 import co.elastic.clients.json.JsonData
@@ -16,6 +19,8 @@ import org.springframework.boot.autoconfigure.web.format.DateTimeFormatters
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
+import org.springframework.data.elasticsearch.client.elc.ElasticsearchAggregation
+import org.springframework.data.elasticsearch.client.elc.ElasticsearchAggregations
 import org.springframework.data.elasticsearch.client.elc.NativeQuery
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations
@@ -820,5 +825,171 @@ class ElasticsearchQueryTests {
 			println("${it.content.name} - ${it.content.price} - sortValues: ${it.sortValues}")
 		}
 		assertEquals(1, thirdPageQuery.searchHits.size)
+	}
+
+	@Test
+	fun `Aggregation을 사용한 집계 예제`() {
+		// 테스트용 추가 데이터 생성
+		listOf(
+			Product(
+				name = "Sony Headphones",
+				description = "High quality wireless headphones",
+				price = 299,
+				category = "Electronics",
+				stock = 200,
+				createdAt = LocalDateTime.now().minusDays(2),
+				available = true
+			),
+			Product(
+				name = "LG Monitor",
+				description = "27 inch 4K monitor",
+				price = 499,
+				category = "Computers",
+				stock = 80,
+				createdAt = LocalDateTime.now().minusDays(3),
+				available = false
+			)
+		).let(productRepository::saveAll)
+
+		println("=== ElasticsearchRepository는 Aggregation을 직접 지원하지 않음 ===")
+		println("Aggregation은 ElasticsearchOperations를 사용해야 합니다.")
+
+		println("1. Terms Aggregation - 카테고리별 문서 수")
+		val termsAggQuery = NativeQueryBuilder()
+			.withQuery { q -> q.matchAll { it } }
+			.withAggregation("category_agg", Aggregation.of { a ->
+				a.terms { t -> t.field("category") }
+			})
+			.withMaxResults(0) // 집계만 필요할 때 문서는 가져오지 않음
+			.build()
+
+		val termsAggResult = elasticsearchOperations.search(termsAggQuery, Product::class.java)
+		val termsAggregations = termsAggResult.aggregations as ElasticsearchAggregations
+		val categoryAgg = termsAggregations.get("category_agg") as ElasticsearchAggregation
+		val categoryBuckets = categoryAgg.aggregation().aggregate.sterms().buckets().array()
+
+		categoryBuckets.forEach { bucket ->
+			println("카테고리: ${bucket.key().stringValue()}, 문서 수: ${bucket.docCount()}")
+		}
+		assertEquals(2, categoryBuckets.size)
+
+		println("2. Stats Aggregation - 가격 통계 (min, max, avg, sum, count)")
+		val statsAggQuery = NativeQueryBuilder()
+			.withQuery { q -> q.matchAll { it } }
+			.withAggregation("price_stats", Aggregation.of { a ->
+				a.stats { s -> s.field("price") }
+			})
+			.withMaxResults(0)
+			.build()
+
+		val statsAggResult = elasticsearchOperations.search(statsAggQuery, Product::class.java)
+		val statsAggregations = statsAggResult.aggregations as ElasticsearchAggregations
+		val priceStatsAgg = statsAggregations.get("price_stats") as ElasticsearchAggregation
+		val priceStats = priceStatsAgg.aggregation().aggregate.stats()
+
+		println("가격 통계:")
+		println("  - 최소값: ${priceStats.min()}")
+		println("  - 최대값: ${priceStats.max()}")
+		println("  - 평균값: ${priceStats.avg()}")
+		println("  - 합계: ${priceStats.sum()}")
+		println("  - 개수: ${priceStats.count()}")
+		assertEquals(5, priceStats.count())
+		assertEquals(299.0, priceStats.min())
+		assertEquals(1999.0, priceStats.max())
+
+		println("3. Range Aggregation - 가격대별 문서 수")
+		val rangeAggQuery = NativeQueryBuilder()
+			.withQuery { q -> q.matchAll { it } }
+			.withAggregation("price_ranges", Aggregation.of { a ->
+				a.range { r ->
+					r.field("price")
+						.ranges(
+							AggregationRange.of { ar -> ar.to(500.0).key("0-500") },
+							AggregationRange.of { ar -> ar.from(500.0).to(1000.0).key("500-1000") },
+							AggregationRange.of { ar -> ar.from(1000.0).key("1000+") }
+						)
+				}
+			})
+			.withMaxResults(0)
+			.build()
+
+		val rangeAggResult = elasticsearchOperations.search(rangeAggQuery, Product::class.java)
+		val rangeAggregations = rangeAggResult.aggregations as ElasticsearchAggregations
+		val priceRangeAgg = rangeAggregations.get("price_ranges") as ElasticsearchAggregation
+		val rangeBuckets = priceRangeAgg.aggregation().aggregate.range().buckets().array()
+
+		rangeBuckets.forEach { bucket ->
+			println("가격대 ${bucket.key()}: ${bucket.docCount()}개")
+		}
+		assertEquals(3, rangeBuckets.size)
+
+		println("4. Avg Aggregation - 카테고리별 평균 가격 (Sub-Aggregation)")
+		val subAggQuery = NativeQueryBuilder()
+			.withQuery { q -> q.matchAll { it } }
+			.withAggregation("category_avg_price", Aggregation.of { a ->
+				a.terms { t -> t.field("category") }
+					.aggregations(mapOf(
+						"avg_price" to Aggregation.of { sub -> sub.avg { avg -> avg.field("price") } }
+					))
+			})
+			.withMaxResults(0)
+			.build()
+
+		val subAggResult = elasticsearchOperations.search(subAggQuery, Product::class.java)
+		val subAggregations = subAggResult.aggregations as ElasticsearchAggregations
+		val categoryAvgAgg = subAggregations.get("category_avg_price") as ElasticsearchAggregation
+		val categoryAvgBuckets = categoryAvgAgg.aggregation().aggregate.sterms().buckets().array()
+
+		categoryAvgBuckets.forEach { bucket ->
+			val avgPrice = bucket.aggregations()["avg_price"]?.avg()?.value()
+			println("카테고리: ${bucket.key().stringValue()}, 평균 가격: $avgPrice")
+		}
+
+		println("5. Filter Aggregation - 판매 가능한 상품만 집계")
+		val filterAggQuery = NativeQueryBuilder()
+			.withQuery { q -> q.matchAll { it } }
+			.withAggregation("available_products", Aggregation.of { a ->
+				a.filter { f -> f.term { t -> t.field("available").value(true) } }
+					.aggregations(mapOf(
+						"avg_price" to Aggregation.of { sub -> sub.avg { avg -> avg.field("price") } },
+						"category_count" to Aggregation.of { sub -> sub.terms { t -> t.field("category") } }
+					))
+			})
+			.withMaxResults(0)
+			.build()
+
+		val filterAggResult = elasticsearchOperations.search(filterAggQuery, Product::class.java)
+		val filterAggregations = filterAggResult.aggregations as ElasticsearchAggregations
+		val availableAgg = filterAggregations.get("available_products") as ElasticsearchAggregation
+		val filterResult = availableAgg.aggregation().aggregate.filter()
+
+		println("판매 가능한 상품 수: ${filterResult.docCount()}")
+		println("판매 가능한 상품 평균 가격: ${filterResult.aggregations()["avg_price"]?.avg()?.value()}")
+
+		val availableCategoryBuckets = filterResult.aggregations()["category_count"]?.sterms()?.buckets()?.array()
+		availableCategoryBuckets?.forEach { bucket ->
+			println("  - ${bucket.key().stringValue()}: ${bucket.docCount()}개")
+		}
+
+		println("6. Date Histogram Aggregation - 일별 생성 문서 수")
+		val dateHistogramQuery = NativeQueryBuilder()
+			.withQuery { q -> q.matchAll { it } }
+			.withAggregation("daily_count", Aggregation.of { a ->
+				a.dateHistogram { dh ->
+					dh.field("createdAt")
+						.calendarInterval(CalendarInterval.Day)
+				}
+			})
+			.withMaxResults(0)
+			.build()
+
+		val dateHistogramResult = elasticsearchOperations.search(dateHistogramQuery, Product::class.java)
+		val dateHistogramAggregations = dateHistogramResult.aggregations as ElasticsearchAggregations
+		val dailyAgg = dateHistogramAggregations.get("daily_count") as ElasticsearchAggregation
+		val dailyBuckets = dailyAgg.aggregation().aggregate.dateHistogram().buckets().array()
+
+		dailyBuckets.forEach { bucket ->
+			println("날짜: ${bucket.keyAsString()}, 문서 수: ${bucket.docCount()}")
+		}
 	}
 }
