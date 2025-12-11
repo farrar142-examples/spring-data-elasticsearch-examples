@@ -1351,3 +1351,158 @@ val query = NativeQueryBuilder().withQuery { q ->
     └── mustNot
 ```
 
+# 10. Sort를 사용한 정렬 예제
+
+```kotlin
+// src/main/kotlin/com/example/demo/products/repositories/ProductRepository.kt
+// 메서드 네이밍으로 정렬
+fun findAllByOrderByPriceAsc(): List<Product>
+fun findAllByOrderByPriceDesc(): List<Product>
+
+// Sort 파라미터로 동적 정렬
+fun findByAvailable(available: Boolean, sort: Sort): List<Product>
+```
+
+```kotlin
+// src/test/kotlin/com/example/demo/ElasticsearchQueryTests.kt
+
+@Test
+fun `Sort를 사용한 정렬 예제`() {
+	println("=== ElasticsearchRepository를 사용한 정렬 ===")
+
+	println("1. 가격 오름차순 정렬")
+	val priceAscProducts = productRepository.findAllByOrderByPriceAsc()
+	priceAscProducts.forEach {
+		println("${it.name} - ${it.price}")
+	}
+	assertEquals(3, priceAscProducts.size)
+	assertEquals(899, priceAscProducts.first().price)
+	assertEquals(1999, priceAscProducts.last().price)
+
+	println("2. 가격 내림차순 정렬")
+	val priceDescProducts = productRepository.findAllByOrderByPriceDesc()
+	priceDescProducts.forEach {
+		println("${it.name} - ${it.price}")
+	}
+	assertEquals(3, priceDescProducts.size)
+	assertEquals(1999, priceDescProducts.first().price)
+	assertEquals(899, priceDescProducts.last().price)
+
+	println("3. 복합 정렬 (카테고리 오름차순 + 가격 내림차순)")
+	val multiSort = productRepository.findByAvailable(
+		true,
+		Sort.by(Sort.Direction.ASC, "category").and(Sort.by(Sort.Direction.DESC, "price"))
+	)
+	multiSort.forEach {
+		println("${it.name} - ${it.category} - ${it.price}")
+	}
+	assertEquals(3, multiSort.size)
+	assertEquals("Computers", multiSort.first().category)
+
+	println("\n=== ElasticsearchOperations를 사용한 정렬 ===")
+
+	println("1. 가격 오름차순 정렬")
+	val priceAscQuery = elasticsearchOperations.search(
+		NativeQueryBuilder()
+			.withQuery { q -> q.matchAll { it } }
+			.withSort(Sort.by(Sort.Direction.ASC, "price"))
+			.build(),
+		Product::class.java
+	)
+	priceAscQuery.forEach {
+		println("${it.content.name} - ${it.content.price}")
+	}
+	assertEquals(3, priceAscQuery.searchHits.size)
+	assertEquals(
+		priceAscProducts.map { it.id },
+		priceAscQuery.searchHits.map { it.content.id }
+	)
+
+	println("2. 가격 내림차순 정렬")
+	val priceDescQuery = elasticsearchOperations.search(
+		NativeQueryBuilder()
+			.withQuery { q -> q.matchAll { it } }
+			.withSort(Sort.by(Sort.Direction.DESC, "price"))
+			.build(),
+		Product::class.java
+	)
+	priceDescQuery.forEach {
+		println("${it.content.name} - ${it.content.price}")
+	}
+	assertEquals(3, priceDescQuery.searchHits.size)
+	assertEquals(
+		priceDescProducts.map { it.id },
+		priceDescQuery.searchHits.map { it.content.id }
+	)
+
+	println("3. 복합 정렬 (카테고리 오름차순 + 가격 내림차순)")
+	val multiSortQuery = elasticsearchOperations.search(
+		NativeQueryBuilder()
+			.withQuery { q -> q.term { t -> t.field("available").value(true) } }
+			.withSort(Sort.by(Sort.Direction.ASC, "category").and(Sort.by(Sort.Direction.DESC, "price")))
+			.build(),
+		Product::class.java
+	)
+	multiSortQuery.forEach {
+		println("${it.content.name} - ${it.content.category} - ${it.content.price}")
+	}
+	assertEquals(3, multiSortQuery.searchHits.size)
+	assertEquals(
+		multiSort.map { it.id },
+		multiSortQuery.searchHits.map { it.content.id }
+	)
+}
+```
+
+### 복합 정렬
+
+여러 필드를 기준으로 정렬할 때는 `and()` 메서드를 사용합니다.
+
+```kotlin
+// 카테고리 오름차순 → 같은 카테고리 내에서 가격 내림차순
+val multiSort = Sort.by(Sort.Direction.ASC, "category")
+    .and(Sort.by(Sort.Direction.DESC, "price"))
+
+// Repository 사용
+productRepository.findByAvailable(true, multiSort)
+
+// ElasticsearchOperations 사용
+NativeQueryBuilder()
+    .withQuery { q -> q.matchAll { it } }
+    .withSort(multiSort)
+    .build()
+```
+
+### 정렬 가능한 필드 타입
+
+| 필드 타입 | 정렬 가능 | 비고 |
+|---------|---------|-----|
+| **Keyword** | ✅ | 알파벳/유니코드 순 |
+| **Long/Integer** | ✅ | 숫자 크기순 |
+| **Double/Float** | ✅ | 숫자 크기순 |
+| **Date** | ✅ | 시간순 |
+| **Boolean** | ✅ | false(0) < true(1) |
+| **Text** | ⚠️ | 직접 정렬 불가, `.keyword` 서브필드 필요 |
+
+#### Text 필드 정렬 주의사항
+
+Text 필드는 분석기를 거쳐 토큰화되므로 **직접 정렬이 불가능**합니다.
+
+```kotlin
+// ❌ 잘못된 예시: Text 필드로 직접 정렬
+Sort.by("name")  // name이 Text 필드면 에러 발생
+
+// ✅ 올바른 예시: Keyword 서브필드 사용 (멀티필드 설정 필요)
+Sort.by("name.keyword")
+```
+
+### 정렬 선택 가이드
+
+```
+정렬 기준이 고정되어 있는가?
+├── Yes → Repository 메서드 네이밍 (findAllByOrderByPriceAsc)
+└── No (동적 정렬 필요)
+    ├── 단순 조회 → Repository + Sort 파라미터
+    └── 복잡한 쿼리와 함께 → ElasticsearchOperations + withSort()
+```
+

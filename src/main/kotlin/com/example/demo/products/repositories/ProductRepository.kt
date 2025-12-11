@@ -1,6 +1,7 @@
 package com.example.demo.products.repositories
 
 import com.example.demo.products.documents.Product
+import org.springframework.data.domain.Sort
 import org.springframework.data.elasticsearch.repository.ElasticsearchRepository
 import java.time.LocalDateTime
 import java.util.Date
@@ -20,4 +21,11 @@ interface ProductRepository : ElasticsearchRepository<Product, String> {
 	fun findByCreatedAtAfter(start: LocalDateTime): List<Product>
 
 	fun findByAvailable(available: Boolean): List<Product>
+
+	fun findByAvailableOrderByPriceAsc(available: Boolean): List<Product>
+	fun findByAvailableOrderByPriceDesc(available: Boolean): List<Product>
+	// 정렬 관련 메서드
+	fun findAllByOrderByPriceAsc(): List<Product>
+	fun findAllByOrderByPriceDesc(): List<Product>
+	fun findByAvailable(available: Boolean, sort: Sort): List<Product>
 }

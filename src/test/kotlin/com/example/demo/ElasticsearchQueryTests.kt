@@ -14,6 +14,7 @@ import org.junit.jupiter.api.assertNotNull
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.web.format.DateTimeFormatters
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.data.domain.Sort
 import org.springframework.data.elasticsearch.client.elc.NativeQuery
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations
@@ -515,5 +516,92 @@ class ElasticsearchQueryTests {
 		assertEquals(complexBoolQuery.searchHits.count(),2)
 		assertEquals(complexBoolQuery.searchHits.first().content.category,"Computers")
 		assertEquals(complexBoolQuery.searchHits.last().content.category,"Electronics")
+	}
+
+	@Test
+	fun `Sort를 사용한 정렬 예제`() {
+		println("=== ElasticsearchRepository를 사용한 정렬 ===")
+
+		println("1. 가격 오름차순 정렬")
+		val priceAscProducts = productRepository.findAllByOrderByPriceAsc()
+		priceAscProducts.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assertEquals(3, priceAscProducts.size)
+		assertEquals(899, priceAscProducts.first().price)
+		assertEquals(1999, priceAscProducts.last().price)
+
+		println("2. 가격 내림차순 정렬")
+		val priceDescProducts = productRepository.findAllByOrderByPriceDesc()
+		priceDescProducts.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assertEquals(3, priceDescProducts.size)
+		assertEquals(1999, priceDescProducts.first().price)
+		assertEquals(899, priceDescProducts.last().price)
+
+		println("3. 복합 정렬 (카테고리 오름차순 + 가격 내림차순)")
+		val multiSort = productRepository.findByAvailable(
+			true,
+			Sort.by(Sort.Direction.ASC, "category").and(Sort.by(Sort.Direction.DESC, "price"))
+		)
+		multiSort.forEach {
+			println("${it.name} - ${it.category} - ${it.price}")
+		}
+		assertEquals(3, multiSort.size)
+		assertEquals("Computers", multiSort.first().category)
+
+		println("\n=== ElasticsearchOperations를 사용한 정렬 ===")
+
+		println("1. 가격 오름차순 정렬")
+		val priceAscQuery = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.matchAll { it } }
+				.withSort(Sort.by(Sort.Direction.ASC, "price"))
+				.build(),
+			Product::class.java
+		)
+		priceAscQuery.forEach {
+			println("${it.content.name} - ${it.content.price}")
+		}
+		assertEquals(3, priceAscQuery.searchHits.size)
+		assertEquals(
+			priceAscProducts.map { it.id },
+			priceAscQuery.searchHits.map { it.content.id }
+		)
+
+		println("2. 가격 내림차순 정렬")
+		val priceDescQuery = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.matchAll { it } }
+				.withSort(Sort.by(Sort.Direction.DESC, "price"))
+				.build(),
+			Product::class.java
+		)
+		priceDescQuery.forEach {
+			println("${it.content.name} - ${it.content.price}")
+		}
+		assertEquals(3, priceDescQuery.searchHits.size)
+		assertEquals(
+			priceDescProducts.map { it.id },
+			priceDescQuery.searchHits.map { it.content.id }
+		)
+
+		println("3. 복합 정렬 (카테고리 오름차순 + 가격 내림차순)")
+		val multiSortQuery = elasticsearchOperations.search(
+			NativeQueryBuilder()
+				.withQuery { q -> q.term { t -> t.field("available").value(true) } }
+				.withSort(Sort.by(Sort.Direction.ASC, "category").and(Sort.by(Sort.Direction.DESC, "price")))
+				.build(),
+			Product::class.java
+		)
+		multiSortQuery.forEach {
+			println("${it.content.name} - ${it.content.category} - ${it.content.price}")
+		}
+		assertEquals(3, multiSortQuery.searchHits.size)
+		assertEquals(
+			multiSort.map { it.id },
+			multiSortQuery.searchHits.map { it.content.id }
+		)
 	}
 }
