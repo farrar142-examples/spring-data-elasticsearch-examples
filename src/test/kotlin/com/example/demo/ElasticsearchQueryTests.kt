@@ -1,12 +1,19 @@
 package com.example.demo
 
+import co.elastic.clients.elasticsearch._types.FieldValue
+import co.elastic.clients.elasticsearch._types.query_dsl.RangeQuery
+import co.elastic.clients.elasticsearch._types.query_dsl.RangeQueryBuilders
+import co.elastic.clients.json.JsonData
 import com.example.demo.products.documents.Product
 import com.example.demo.products.repositories.ProductRepository
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.TestMethodOrder
 import org.junit.jupiter.api.assertNotNull
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.data.elasticsearch.client.elc.NativeQuery
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations
 import java.time.LocalDateTime
@@ -151,5 +158,140 @@ class ElasticsearchQueryTests {
         }
         assert(keywordProducts.isEmpty)
     }
+	@Test
+	fun `Number 필드 검색 예제`(){
+		println("ElasticsearchRepository 를 사용한 검색")
 
+		println("1. 가격이 1000 이상인 문서 검색")
+		val price1000Products = productRepository.findByPriceGreaterThanEqual(1000)
+		price1000Products.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assert(price1000Products.size == 1)
+
+		println("2. 가격이 900 이하인 문서 검색")
+		val price900Products = productRepository.findByPriceLessThanEqual(900)
+		price900Products.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assert(price900Products.size == 1)
+
+		println("3. 가격이 900 이상 1000 이하인 문서 검색")
+		val price900to1000Products = productRepository.findByPriceBetween(900,1000)
+		price900to1000Products.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assert(price900to1000Products.size == 1)
+
+		println("4. 가격이 899인 문서 검색")
+		val price899Products = productRepository.findByPrice(899)
+		price899Products.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assert(price899Products.size == 1)
+
+		println("5. 가격이 899,1999인 문서 검색")
+		val price899or1999Products = productRepository.findByPriceIn(listOf(899,1999))
+		price899or1999Products.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assert(price899or1999Products.size == 2)
+
+		println("ElasticsearchOperations 를 사용한 검색")
+		
+		println("1. 가격이 1000 이상인 문서 검색")
+	    val price1000ProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.range { r ->
+					r.number { n->
+						n.field("price").gte(1000.0)
+					}
+				}
+			}.build(),
+		    Product::class.java
+	    )
+		price1000ProductsQuery.forEach {
+		    println("${it.content.name} - ${it.content.price}")
+	    }
+	    assert(price1000ProductsQuery.count() == 1)
+		assertEquals(
+			price1000Products.map { it.id },
+			price1000ProductsQuery.searchHits.map{it.content.id}
+		)
+
+		println("2. 가격이 900 이하인 문서 검색")
+		val price900ProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.range { r ->
+					r.number { n ->
+						n.field("price").lte(900.0)
+					}
+				}
+			}.build(),
+			Product::class.java
+		)
+		price900ProductsQuery.forEach {
+			println("${it.content.name} - ${it.content.price}")
+		}
+		assertEquals(
+			price900Products.map { it.id },
+			price900ProductsQuery.searchHits.map{it.content.id}
+		)
+
+		println("3. 가격이 900 이상 1000 이하인 문서 검색")
+		val price900to1000ProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.range { r ->
+					r.number { n ->
+						n.field("price").gte(900.0).lte(1000.0)
+					}
+				}
+			}.build(),
+			Product::class.java
+		)
+		assert(price900to1000ProductsQuery.count() == 1)
+		assertEquals(
+			price900to1000Products.map { it.id },
+			price900to1000ProductsQuery.searchHits.map{it.content.id}
+		)
+
+		println("4. 가격이 899인 문서 검색")
+		val price899ProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.term { t -> t.field("price").value(899.0) }
+			}.build(),
+			Product::class.java
+		)
+		assert(price899ProductsQuery.count() == 1)
+		assertEquals(
+			price899Products.map { it.id },
+			price899ProductsQuery.searchHits.map{it.content.id}
+		)
+
+		println("5. 가격이 899,1999인 문서 검색")
+		val price899or1999ProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery {q->
+
+				q.terms{t->
+					t.field("price").terms{v->
+						v.value(
+							listOf(
+								FieldValue.of(899),
+								FieldValue.of(1999)
+							)
+						)
+					}
+				}
+			}.build()
+			, Product::class.java
+		)
+		price899or1999ProductsQuery.forEach{
+			println("${it.content.name} - ${it.content.price}")
+		}
+		assertEquals(
+			price899or1999Products.map { it.id },
+			price899or1999ProductsQuery.searchHits.map{it.content.id}
+		)
+
+	}
 }

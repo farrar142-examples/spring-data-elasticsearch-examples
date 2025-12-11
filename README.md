@@ -593,3 +593,188 @@ val multiFieldQuery = NativeQueryBuilder().withQuery { q ->
                         ├── 값 1개 → term
                         └── 값 여러 개 → terms
 ```
+# 8. NumberField를 사용한 검색 예제
+```kotlin
+// src/main/kotlin/com/example/demo/products/repositories/ProductRepository.kt
+@Test
+	fun `Number 필드 검색 예제`(){
+		println("ElasticsearchRepository 를 사용한 검색")
+
+		println("1. 가격이 1000 이상인 문서 검색")
+		val price1000Products = productRepository.findByPriceGreaterThanEqual(1000)
+		price1000Products.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assert(price1000Products.size == 1)
+
+		println("2. 가격이 900 이하인 문서 검색")
+		val price900Products = productRepository.findByPriceLessThanEqual(900)
+		price900Products.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assert(price900Products.size == 1)
+
+		println("3. 가격이 900 이상 1000 이하인 문서 검색")
+		val price900to1000Products = productRepository.findByPriceBetween(900,1000)
+		price900to1000Products.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assert(price900to1000Products.size == 1)
+
+		println("4. 가격이 899인 문서 검색")
+		val price899Products = productRepository.findByPrice(899)
+		price899Products.forEach {
+			println("${it.name} - ${it.price}")
+		}
+		assert(price899Products.size == 1)
+
+		println("ElasticsearchOperations 를 사용한 검색")
+		
+		println("1. 가격이 1000 이상인 문서 검색")
+	    val price1000ProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.range { r ->
+					r.number { n->
+						n.field("price").gte(1000.0)
+					}
+				}
+			}.build(),
+		    Product::class.java
+	    )
+		price1000ProductsQuery.forEach {
+		    println("${it.content.name} - ${it.content.price}")
+	    }
+	    assert(price1000ProductsQuery.count() == 1)
+		assertEquals(
+			price1000Products.map { it.id },
+			price1000ProductsQuery.searchHits.map{it.content.id}
+		)
+
+		println("2. 가격이 900 이하인 문서 검색")
+		val price900ProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.range { r ->
+					r.number { n ->
+						n.field("price").lte(900.0)
+					}
+				}
+			}.build(),
+			Product::class.java
+		)
+		price900ProductsQuery.forEach {
+			println("${it.content.name} - ${it.content.price}")
+		}
+		assertEquals(
+			price900Products.map { it.id },
+			price900ProductsQuery.searchHits.map{it.content.id}
+		)
+
+		println("3. 가격이 900 이상 1000 이하인 문서 검색")
+		val price900to1000ProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.range { r ->
+					r.number { n ->
+						n.field("price").gte(900.0).lte(1000.0)
+					}
+				}
+			}.build(),
+			Product::class.java
+		)
+		assert(price900to1000ProductsQuery.count() == 1)
+		assertEquals(
+			price900to1000Products.map { it.id },
+			price900to1000ProductsQuery.searchHits.map{it.content.id}
+		)
+
+		println("4. 가격이 899인 문서 검색")
+		val price899ProductsQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.term { t -> t.field("price").value(899) }
+			}.build(),
+			Product::class.java
+		)
+		assert(price899ProductsQuery.count() == 1)
+		assertEquals(
+			price899Products.map { it.id },
+			price899ProductsQuery.searchHits.map{it.content.id}
+		)
+```
+
+### Number 필드에서 사용하는 쿼리
+
+숫자 필드(Long, Integer, Double 등)는 **Keyword처럼 분석기를 거치지 않습니다.** 따라서 `term` 쿼리로 정확한 값 매칭이 가능합니다.
+
+#### 숫자 필드에서 사용 가능한 쿼리
+
+| 쿼리        | 용도           | 예시                                          |
+|-----------|--------------|---------------------------------------------|
+| **term**  | 정확한 값 1개 매칭  | `price == 899`                              |
+| **terms** | 정확한 값 여러 개 매칭 | `price IN (899, 999, 1099)`                 |
+| **range** | 범위 검색        | `price >= 900 AND price <= 1000`            |
+
+#### term 쿼리로 숫자 정확 매칭
+
+```kotlin
+// Long 필드에서 정확히 899인 문서 검색
+val query = NativeQueryBuilder().withQuery { q ->
+    q.term { t -> t.field("price").value(899) }
+}.build()
+```
+
+#### terms 쿼리로 여러 값 매칭
+
+```kotlin
+// price가 899, 999, 1099 중 하나인 문서 검색
+// SQL: WHERE price IN (899, 999, 1099)
+val query = NativeQueryBuilder().withQuery { q ->
+    q.terms { t ->
+        t.field("price")
+            .terms { v ->
+                v.value(
+                    listOf(
+                        FieldValue.of(899),
+                        FieldValue.of(999),
+                        FieldValue.of(1099)
+                    )
+                )
+            }
+    }
+}.build()
+```
+
+#### range 쿼리로 범위 검색
+
+```kotlin
+// 가격이 900 이상 1000 이하인 문서 검색
+// gte(), lte()는 Double 타입만 받으므로 .0을 붙여야 합니다
+val query = NativeQueryBuilder().withQuery { q ->
+    q.range { r ->
+        r.number { n ->
+            n.field("price").gte(900.0).lte(1000.0)
+        }
+    }
+}.build()
+```
+
+
+```kotlin
+// ✅ Range 쿼리: Double 파라미터여도 안전 (비교 연산)
+n.field("price").gte(900.0).lte(1000.0)
+
+// ⚠️ Term 쿼리: Double 필드에서 정확 매칭 시 주의 (정확 일치)
+q.term { t -> t.field("price").value(899.99) }  // 실패 가능!
+```
+
+
+
+### Number 필드 쿼리 선택 가이드
+
+```
+숫자 값을 검색하려는가?
+├── 정확한 값 매칭이 필요한가?
+│   ├── 값 1개 → term
+│   └── 값 여러 개 → terms
+└── 범위 검색이 필요한가?
+    └── range (gte, lte, gt, lt)
+    
+```
