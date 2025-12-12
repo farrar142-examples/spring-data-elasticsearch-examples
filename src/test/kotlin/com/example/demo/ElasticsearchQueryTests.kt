@@ -6,6 +6,9 @@ import co.elastic.clients.elasticsearch._types.aggregations.AggregationRange
 import co.elastic.clients.elasticsearch._types.aggregations.CalendarInterval
 import co.elastic.clients.elasticsearch._types.query_dsl.RangeQuery
 import co.elastic.clients.elasticsearch._types.query_dsl.RangeQueryBuilders
+import co.elastic.clients.elasticsearch.core.search.CompletionSuggester
+import co.elastic.clients.elasticsearch.core.search.FieldSuggester
+import co.elastic.clients.elasticsearch.core.search.Suggester
 import co.elastic.clients.json.JsonData
 import com.example.demo.products.documents.Product
 import com.example.demo.products.repositories.ProductRepository
@@ -24,6 +27,8 @@ import org.springframework.data.elasticsearch.client.elc.ElasticsearchAggregatio
 import org.springframework.data.elasticsearch.client.elc.NativeQuery
 import org.springframework.data.elasticsearch.client.elc.NativeQueryBuilder
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations
+import org.springframework.data.elasticsearch.core.suggest.Completion
+import org.springframework.data.elasticsearch.core.suggest.response.CompletionSuggestion
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -990,6 +995,255 @@ class ElasticsearchQueryTests {
 
 		dailyBuckets.forEach { bucket ->
 			println("날짜: ${bucket.keyAsString()}, 문서 수: ${bucket.docCount()}")
+		}
+	}
+
+	@Test
+	fun `Completion필드를 사용한 검색 예제`(){
+		val products = listOf(
+			Product(
+				name = "삼성 갤럭시 S23",
+				description = "삼성의 최신 플래그십 스마트폰",
+				price = 950,
+				category = "Electronics",
+				stock = 120,
+				createdAt = LocalDateTime.now().minusDays(2),
+				available = true,
+				suggests = Completion(listOf("삼성 갤럭시 s23", "갤럭시 s23", "samsung", "galaxy", "s23", "삼성"))
+			),
+			Product(
+				name = "LG 그램 16",
+				description = "휴대성이 뛰어난 고성능 노트북",
+				price = 1800,
+				category = "Computers",
+				stock = 40,
+				createdAt = LocalDateTime.now().minusWeeks(1),
+				available = true,
+				suggests = Completion(listOf("lg 그램 16", "그램 16", "lg", "gram 16"))
+			),
+			Product(
+				name = "삼성 QLED TV 55인치",
+				description = "선명한 화질의 55인치 QLED TV",
+				price = 1200,
+				category = "Electronics",
+				stock = 25,
+				createdAt = LocalDateTime.now().minusMonths(1),
+				available = true,
+				suggests = Completion(listOf("삼성 qled", "qled tv", "55인치", "qled", "samsung qled"))
+			),
+			Product(
+				name = "LG OLED TV 65인치",
+				description = "완벽한 블랙 표현의 65인치 OLED TV",
+				price = 2500,
+				category = "Electronics",
+				stock = 10,
+				createdAt = LocalDateTime.now().minusDays(10),
+				available = true,
+				suggests = Completion(listOf("lg oled", "oled tv", "65인치", "lg oled 65"))
+			),
+			Product(
+				name = "현대 아반떼 스마트키",
+				description = "현대 아반떼 전용 스마트키 정품 액세서리",
+				price = 150,
+				category = "Automotive",
+				stock = 200,
+				createdAt = LocalDateTime.now().minusDays(30),
+				available = true,
+				suggests = Completion(listOf("현대", "아반떼", "스마트키", "hyundai", "avante"))
+			),
+			Product(
+				name = "카카오 프렌즈 인형",
+				description = "카카오 프렌즈 캐릭터 인형",
+				price = 35,
+				category = "Toys",
+				stock = 300,
+				createdAt = LocalDateTime.now().minusDays(5),
+				available = true,
+				suggests = Completion(listOf("카카오", "카카오프렌즈", "프렌즈", "인형", "kakao"))
+			),
+			Product(
+				name = "제주 감귤 1kg",
+				description = "신선한 제주산 감귤 1kg 팩",
+				price = 12,
+				category = "Food",
+				stock = 500,
+				createdAt = LocalDateTime.now().minusDays(3),
+				available = true,
+				suggests = Completion(listOf("제주", "감귤", "제주 감귤", "1kg"))
+			),
+			Product(
+				name = "오뚜기 진라면 매운맛",
+				description = "한국의 대표적인 라면 브랜드",
+				price = 2,
+				category = "Food",
+				stock = 1000,
+				createdAt = LocalDateTime.now().minusDays(60),
+				available = true,
+				suggests = Completion(listOf("오뚜기", "진라면", "라면", "ottogi"))
+			),
+			Product(
+				name = "쿠쿠 전기압력밥솥 10인용",
+				description = "간편한 요리를 위한 전기압력밥솥",
+				price = 220,
+				category = "Appliances",
+				stock = 80,
+				createdAt = LocalDateTime.now().minusWeeks(2),
+				available = true,
+				suggests = Completion(listOf("쿠쿠", "전기압력밥솥", "밥솥", "cuckoo"))
+			),
+			Product(
+			 name = "한샘 책상 L형",
+			 description = "실용적인 L형 책상 가구",
+			 price = 180,
+			 category = "Furniture",
+			 stock = 60,
+			 createdAt = LocalDateTime.now().minusDays(7),
+			 available = true,
+			 suggests = Completion(listOf("한샘", "책상", "L형", "한샘 책상"))
+			),
+			Product(
+				name = "네이버 스마트홈 AI 스피커",
+				description = "음성으로 집을 제어하는 스마트 스피커",
+				price = 120,
+				category = "Electronics",
+				stock = 250,
+				createdAt = LocalDateTime.now().minusDays(4),
+				available = true,
+				suggests = Completion(listOf("네이버", "스마트홈", "ai 스피커", "네이버 클로바"))
+			),
+			Product(
+				name = "삼성 무선청소기 제트",
+				description = "강력한 흡입력의 무선청소기",
+				price = 450,
+				category = "Appliances",
+				stock = 90,
+				createdAt = LocalDateTime.now().minusWeeks(3),
+				available = true,
+				suggests = Completion(listOf("삼성 청소기", "무선청소기", "제트", "samsung jet"))
+			),
+			Product(
+				name = "농심 신라면",
+				description = "매콤한 맛의 한국 전통 라면",
+				price = 1,
+				category = "Food",
+				stock = 2000,
+				createdAt = LocalDateTime.now().minusDays(20),
+				available = true,
+				suggests = Completion(listOf("농심", "신라면", "라면", "shin ramyun"))
+			),
+			Product(
+				name = "LG 냉장고 500L",
+				description = "대용량 500리터 냉장고",
+				price = 1400,
+				category = "Appliances",
+				stock = 15,
+				createdAt = LocalDateTime.now().minusMonths(2),
+				available = true,
+				suggests = Completion(listOf("lg 냉장고", "500L", "냉장고", "lg refrigerator"))
+			),
+			Product(
+				name = "한샘 의자 오피스",
+				description = "장시간 작업에 편안한 사무용 의자",
+				price = 120,
+				category = "Furniture",
+				stock = 70,
+				createdAt = LocalDateTime.now().minusDays(12),
+				available = true,
+				suggests = Completion(listOf("한샘 의자", "오피스 체어", "의자"))
+			),
+			Product(
+				name = "마켓컬리 유기농 바나나 1kg",
+				description = "신선한 수입 유기농 바나나 1kg",
+				price = 8,
+				category = "Food",
+				stock = 180,
+				createdAt = LocalDateTime.now().minusDays(2),
+				available = true,
+				suggests = Completion(listOf("유기농", "바나나", "마켓컬리", "1kg"))
+			),
+			Product(
+				name = "삼성 SSD 1TB",
+				description = "빠른 속도의 내부 SSD 저장장치",
+				price = 150,
+				category = "Computers",
+				stock = 120,
+				createdAt = LocalDateTime.now().minusWeeks(4),
+				available = true,
+				suggests = Completion(listOf("ssd 1tb", "삼성 ssd", "samsung ssd", "저장장치"))
+			),
+			Product(
+				name = "ASUS 게이밍 노트북",
+				description = "고성능 GPU 탑재 게이밍 노트북",
+				price = 2200,
+				category = "Computers",
+				stock = 30,
+				createdAt = LocalDateTime.now().minusDays(15),
+				available = true,
+				suggests = Completion(listOf("asus", "게이밍 노트북", "rog", "gaming laptop"))
+			),
+			Product(
+				name = "미미박스 화장품 세트",
+				description = "여성을 위한 스킨케어 화장품 세트",
+				price = 45,
+				category = "Beauty",
+				stock = 260,
+				createdAt = LocalDateTime.now().minusDays(6),
+				available = true,
+				suggests = Completion(listOf("화장품", "미미박스", "스킨케어", "세트"))
+			),
+			Product(
+				name = "토이저러스 블록 세트",
+				description = "어린이용 블록 세트 (조립 장난감)",
+				price = 55,
+				category = "Toys",
+				stock = 150,
+				createdAt = LocalDateTime.now().minusWeeks(1),
+				available = true,
+				suggests = Completion(listOf("블록", "토이저러스", "장난감", "블록 세트"))
+			),
+			Product(
+				name = "김치찌개",
+				description = "돈골을 푹 고아 끓인 김치찌개",
+				price = 55,
+				category = "Foods",
+				stock = 150,
+				createdAt = LocalDateTime.now().minusWeeks(1),
+				available = true,
+				suggests = Completion(listOf("김치찌개"))
+			)
+		)
+		// 테스트용으로 저장
+		productRepository.saveAll(products)
+        val suggester = Suggester.of { s ->
+            s.suggesters("prod-suggest") { fs ->
+                fs.prefix("김치찍")
+                    .completion { c ->
+                        c.field("suggests")
+                            .size(5)
+                            .skipDuplicates(true)
+							.fuzzy{f->
+								f.transpositions(true)
+							}
+                    }
+            }
+        }
+		val query = NativeQueryBuilder()
+				.withSuggester(suggester)
+				.withMaxResults(0)
+				.build()
+		val suggestResult = elasticsearchOperations.search(query,Product::class.java)
+		val r = suggestResult.suggest
+			?.suggestions
+			?.filterIsInstance<CompletionSuggestion<Product>>()
+			?.flatMap{cs->
+				cs.entries.flatMap { e->
+					e.options.mapNotNull{o->
+						o.searchHit?.content
+					}
+				}
+			}?:emptyList()
+		r.forEach {
+			println("${it.name} - ${it.price}")
 		}
 	}
 }

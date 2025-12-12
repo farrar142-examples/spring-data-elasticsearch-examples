@@ -1991,7 +1991,7 @@ val query = NativeQueryBuilder()
     .withAggregation("category_stats", Aggregation.of { a ->
         a.terms { t -> t.field("category") }  // 먼저 카테고리로 그룹화
             .aggregations(mapOf(
-                "avg_price" to Aggregation.of { sub -> 
+                "avg_price" to Aggregation.of { sub ->
                     sub.avg { avg -> avg.field("price") }  // 각 그룹의 평균 가격
                 },
                 "max_price" to Aggregation.of { sub ->
@@ -2008,7 +2008,7 @@ val query = NativeQueryBuilder()
 카테고리: Electronics
   - 평균 가격: 732.33
   - 최대 가격: 999.0
-카테고리: Computers  
+카테고리: Computers
   - 평균 가격: 1249.0
   - 최대 가격: 1999.0
 ```
@@ -2077,3 +2077,656 @@ val result = elasticsearchOperations.search(query, Product::class.java)
     └── Terms + Sub-Aggregation (avg, sum 등)
 ```
 
+
+# 13. Completion을 이용한 검색 예제
+```json
+// src/main/resources/elasticsearch/mappings/product-mapping.json
+{
+  "analysis": {
+    "filter": {
+      "edge_ngram_filter": {
+        "type": "edge_ngram",
+        "min_gram": 1,
+        "max_gram": 20
+      }
+    },
+    "analyzer": {
+      "autocomplete_index_analyzer": {
+        "type": "custom",
+        "tokenizer": "standard",
+        "filter": ["lowercase", "edge_ngram_filter"]
+      },
+      "autocomplete_search_analyzer": {
+        "type": "custom",
+        "tokenizer": "standard",
+        "filter": ["lowercase"]
+      }
+    }
+  }
+}
+
+```
+```kotlin
+// src/main/kotlin/com/example/demo/products/documents/Product.kt
+@Document(indexName = "products")
+@Setting(settingPath = "elasticsearch/settings.json")
+data class Product(
+	@Field(type = FieldType.Text, analyzer = "nori")
+	val name: String,
+
+	@Field(type = FieldType.Text, analyzer = "nori")
+	val description: String,
+
+	@Field(type = FieldType.Keyword)
+	val category: String,
+
+	@Field(type = FieldType.Long)
+	val price: Long,
+
+	@Field(type = FieldType.Integer)
+	val stock: Int,
+
+	@Field(type = FieldType.Date, format = [DateFormat.date_hour_minute_second])
+	val createdAt: LocalDateTime,
+
+	@Field(type = FieldType.Boolean)
+	val available: Boolean,
+	@CompletionField(searchAnalyzer ="autocomplete_index_analyzer" )
+	val suggests: Completion = Completion(listOf(name.lowercase())),
+
+	@Id
+	val id: String? = null,
+
+	)
+```
+```kotlin
+// src/test/kotlin/com/example/demo/ElasticsearchQueryTests.kt
+
+@Test
+fun `Completion필드를 사용한 검색 예제`(){
+	val products = listOf(
+		Product(
+			name = "삼성 갤럭시 S23",
+			description = "삼성의 최신 플래그십 스마트폰",
+			price = 950,
+			category = "Electronics",
+			stock = 120,
+			createdAt = LocalDateTime.now().minusDays(2),
+			available = true,
+			suggests = Completion(listOf("삼성 갤럭시 s23", "갤럭시 s23", "samsung", "galaxy", "s23", "삼성"))
+		),
+		Product(
+			name = "LG 그램 16",
+			description = "휴대성이 뛰어난 고성능 노트북",
+			price = 1800,
+			category = "Computers",
+			stock = 40,
+			createdAt = LocalDateTime.now().minusWeeks(1),
+			available = true,
+			suggests = Completion(listOf("lg 그램 16", "그램 16", "lg", "gram 16"))
+		),
+		Product(
+			name = "삼성 QLED TV 55인치",
+			description = "선명한 화질의 55인치 QLED TV",
+			price = 1200,
+			category = "Electronics",
+			stock = 25,
+			createdAt = LocalDateTime.now().minusMonths(1),
+			available = true,
+			suggests = Completion(listOf("삼성 qled", "qled tv", "55인치", "qled", "samsung qled"))
+		),
+		Product(
+			name = "LG OLED TV 65인치",
+			description = "완벽한 블랙 표현의 65인치 OLED TV",
+			price = 2500,
+			category = "Electronics",
+			stock = 10,
+			createdAt = LocalDateTime.now().minusDays(10),
+			available = true,
+			suggests = Completion(listOf("lg oled", "oled tv", "65인치", "lg oled 65"))
+		),
+		Product(
+			name = "현대 아반떼 스마트키",
+			description = "현대 아반떼 전용 스마트키 정품 액세서리",
+			price = 150,
+			category = "Automotive",
+			stock = 200,
+			createdAt = LocalDateTime.now().minusDays(30),
+			available = true,
+			suggests = Completion(listOf("현대", "아반떼", "스마트키", "hyundai", "avante"))
+		),
+		Product(
+			name = "카카오 프렌즈 인형",
+			description = "카카오 프렌즈 캐릭터 인형",
+			price = 35,
+			category = "Toys",
+			stock = 300,
+			createdAt = LocalDateTime.now().minusDays(5),
+			available = true,
+			suggests = Completion(listOf("카카오", "카카오프렌즈", "프렌즈", "인형", "kakao"))
+		),
+		Product(
+			name = "제주 감귤 1kg",
+			description = "신선한 제주산 감귤 1kg 팩",
+			price = 12,
+			category = "Food",
+			stock = 500,
+			createdAt = LocalDateTime.now().minusDays(3),
+			available = true,
+			suggests = Completion(listOf("제주", "감귤", "제주 감귤", "1kg"))
+		),
+		Product(
+			name = "오뚜기 진라면 매운맛",
+			description = "한국의 대표적인 라면 브랜드",
+			price = 2,
+			category = "Food",
+			stock = 1000,
+			createdAt = LocalDateTime.now().minusDays(60),
+			available = true,
+			suggests = Completion(listOf("오뚜기", "진라면", "라면", "ottogi"))
+		),
+		Product(
+			name = "쿠쿠 전기압력밥솥 10인용",
+			description = "간편한 요리를 위한 전기압력밥솥",
+			price = 220,
+			category = "Appliances",
+			stock = 80,
+			createdAt = LocalDateTime.now().minusWeeks(2),
+			available = true,
+			suggests = Completion(listOf("쿠쿠", "전기압력밥솥", "밥솥", "cuckoo"))
+		),
+		Product(
+			name = "한샘 책상 L형",
+			description = "실용적인 L형 책상 가구",
+			price = 180,
+			category = "Furniture",
+			stock = 60,
+			createdAt = LocalDateTime.now().minusDays(7),
+			available = true,
+			suggests = Completion(listOf("한샘", "책상", "L형", "한샘 책상"))
+		),
+		Product(
+			name = "네이버 스마트홈 AI 스피커",
+			description = "음성으로 집을 제어하는 스마트 스피커",
+			price = 120,
+			category = "Electronics",
+			stock = 250,
+			createdAt = LocalDateTime.now().minusDays(4),
+			available = true,
+			suggests = Completion(listOf("네이버", "스마트홈", "ai 스피커", "네이버 클로바"))
+		),
+		Product(
+			name = "삼성 무선청소기 제트",
+			description = "강력한 흡입력의 무선청소기",
+			price = 450,
+			category = "Appliances",
+			stock = 90,
+			createdAt = LocalDateTime.now().minusWeeks(3),
+			available = true,
+			suggests = Completion(listOf("삼성 청소기", "무선청소기", "제트", "samsung jet"))
+		),
+		Product(
+			name = "농심 신라면",
+			description = "매콤한 맛의 한국 전통 라면",
+			price = 1,
+			category = "Food",
+			stock = 2000,
+			createdAt = LocalDateTime.now().minusDays(20),
+			available = true,
+			suggests = Completion(listOf("농심", "신라면", "라면", "shin ramyun"))
+		),
+		Product(
+			name = "LG 냉장고 500L",
+			description = "대용량 500리터 냉장고",
+			price = 1400,
+			category = "Appliances",
+			stock = 15,
+			createdAt = LocalDateTime.now().minusMonths(2),
+			available = true,
+			suggests = Completion(listOf("lg 냉장고", "500L", "냉장고", "lg refrigerator"))
+		),
+		Product(
+			name = "한샘 의자 오피스",
+			description = "장시간 작업에 편안한 사무용 의자",
+			price = 120,
+			category = "Furniture",
+			stock = 70,
+			createdAt = LocalDateTime.now().minusDays(12),
+			available = true,
+			suggests = Completion(listOf("한샘 의자", "오피스 체어", "의자"))
+		),
+		Product(
+			name = "마켓컬리 유기농 바나나 1kg",
+			description = "신선한 수입 유기농 바나나 1kg",
+			price = 8,
+			category = "Food",
+			stock = 180,
+			createdAt = LocalDateTime.now().minusDays(2),
+			available = true,
+			suggests = Completion(listOf("유기농", "바나나", "마켓컬리", "1kg"))
+		),
+		Product(
+			name = "삼성 SSD 1TB",
+			description = "빠른 속도의 내부 SSD 저장장치",
+			price = 150,
+			category = "Computers",
+			stock = 120,
+			createdAt = LocalDateTime.now().minusWeeks(4),
+			available = true,
+			suggests = Completion(listOf("ssd 1tb", "삼성 ssd", "samsung ssd", "저장장치"))
+		),
+		Product(
+			name = "ASUS 게이밍 노트북",
+			description = "고성능 GPU 탑재 게이밍 노트북",
+			price = 2200,
+			category = "Computers",
+			stock = 30,
+			createdAt = LocalDateTime.now().minusDays(15),
+			available = true,
+			suggests = Completion(listOf("asus", "게이밍 노트북", "rog", "gaming laptop"))
+		),
+		Product(
+			name = "미미박스 화장품 세트",
+			description = "여성을 위한 스킨케어 화장품 세트",
+			price = 45,
+			category = "Beauty",
+			stock = 260,
+			createdAt = LocalDateTime.now().minusDays(6),
+			available = true,
+			suggests = Completion(listOf("화장품", "미미박스", "스킨케어", "세트"))
+		),
+		Product(
+			name = "토이저러스 블록 세트",
+			description = "어린이용 블록 세트 (조립 장난감)",
+			price = 55,
+			category = "Toys",
+			stock = 150,
+			createdAt = LocalDateTime.now().minusWeeks(1),
+			available = true,
+			suggests = Completion(listOf("블록", "토이저러스", "장난감", "블록 세트"))
+		),
+		Product(
+			name = "김치찌개",
+			description = "돈골을 푹 고아 끓인 김치찌개",
+			price = 55,
+			category = "Foods",
+			stock = 150,
+			createdAt = LocalDateTime.now().minusWeeks(1),
+			available = true,
+			suggests = Completion(listOf("김치찌개"))
+		)
+	)
+	// 테스트용으로 저장
+	productRepository.saveAll(products)
+	val suggester = Suggester.of { s ->
+		s.suggesters("prod-suggest") { fs ->
+			fs.prefix("김치찍")
+				.completion { c ->
+					c.field("suggests")
+						.size(5)
+						.skipDuplicates(true)
+						.fuzzy{f->
+							f.transpositions(true)
+						}
+				}
+		}
+	}
+	val query = NativeQueryBuilder()
+		.withSuggester(suggester)
+		.withMaxResults(0)
+		.build()
+	val suggestResult = elasticsearchOperations.search(query,Product::class.java)
+	val r = suggestResult.suggest
+		?.suggestions
+		?.filterIsInstance<CompletionSuggestion<Product>>()
+		?.flatMap{cs->
+			cs.entries.flatMap { e->
+				e.options.mapNotNull{o->
+					o.searchHit?.content
+				}
+			}
+		}?:emptyList()
+	r.forEach {
+		println("${it.name} - ${it.price}")
+	}
+}
+```
+> Document의 매핑정보 변경 시 인덱스를 삭제 후 재생성해야 반영됩니다.
+> 예제에서는 docker-compose로 Elasticsearch를 실행 중이므로 아래 명령어로 인덱스를 삭제할 수 있습니다.
+
+```bash
+curl -X DELETE "localhost:9200/products"
+```
+
+Completion 필드는 Elasticsearch에서 **자동완성(Autocomplete)** 기능을 구현하기 위한 특수한 필드 타입입니다. 사용자가 검색어를 입력할 때 실시간으로 추천 결과를 제공하는 데 최적화되어 있습니다.
+
+## Completion 필드란?
+
+Completion 필드는 **FST(Finite State Transducer)** 자료구조를 사용하여 접두사(prefix) 기반 검색을 **매우 빠르게** 수행합니다. 일반 Text 필드 검색과 달리 메모리에 최적화된 자료구조를 사용하므로 수백만 건의 데이터에서도 밀리초 단위의 응답이 가능합니다.
+
+### Completion vs Text 필드 비교
+
+| 구분 | Text 필드 + match_phrase_prefix | Completion 필드 |
+|-----|-------------------------------|----------------|
+| **성능** | 느림 (역색인 검색) | 빠름 (FST 자료구조) |
+| **메모리** | 디스크 기반 | 메모리 기반 |
+| **용도** | 일반 검색 | 자동완성 전용 |
+| **검색 방식** | 토큰화 후 매칭 | 접두사(prefix) 매칭 |
+| **대용량 데이터** | 성능 저하 | 일관된 성능 |
+
+### Completion 필드 정의
+
+```kotlin
+// src/main/kotlin/com/example/demo/products/documents/Product.kt
+@Document(indexName = "products")
+data class Product(
+    @Id
+    val id: String? = null,
+
+    @Field(type = FieldType.Text, analyzer = "nori")
+    val name: String,
+
+    // ... 기타 필드 ...
+
+    @CompletionField
+    val suggests: Completion = Completion(listOf(name.lowercase()))
+)
+```
+
+### @CompletionField 어노테이션
+
+`@CompletionField`는 Spring Data Elasticsearch에서 Completion 타입 필드를 정의할 때 사용합니다.
+
+| 속성 | 설명 | 기본값 |
+|-----|-----|-------|
+| `analyzer` | 인덱싱 시 사용할 분석기 | `simple` |
+| `searchAnalyzer` | 검색 시 사용할 분석기 | `simple` |
+| `maxInputLength` | 입력 문자열 최대 길이 | `50` |
+| `preserveSeparators` | 구분자 유지 여부 | `true` |
+| `preservePositionIncrements` | 위치 증분 유지 여부 | `true` |
+
+### analyzer와 searchAnalyzer 설정에 따른 검색 결과 차이
+
+Completion 필드에서 `analyzer`와 `searchAnalyzer`를 어떻게 설정하느냐에 따라 검색 결과가 달라질 수 있습니다.
+
+#### Completion Suggester의 기본 동작 원리
+
+**Completion 필드는 FST(Finite State Transducer) 자료구조를 사용하며, 기본적으로 prefix 매칭을 수행합니다.** 즉, edge_ngram을 명시적으로 설정하지 않아도 prefix로 시작하는 모든 항목을 찾을 수 있습니다.
+
+```
+인덱싱: "김치찌개"
+검색 가능한 prefix: "김", "김치", "김치찌", "김치찌개" → 모두 매칭됨!
+```
+
+> **핵심:** Completion Suggester는 자체적으로 prefix 기반 검색을 지원하므로, 단순 자동완성 목적이라면 edge_ngram 없이도 동작합니다.
+
+#### analyzer의 역할
+
+Completion 필드에서 analyzer는 **입력 문자열을 토큰화하는 역할**을 합니다. 토큰화된 각 토큰에 대해 prefix 매칭이 수행됩니다.
+
+```json
+// src/main/resources/elasticsearch/settings.json
+{
+  "analysis": {
+    "filter": {
+      "edge_ngram_filter": {
+        "type": "edge_ngram",
+        "min_gram": 1,
+        "max_gram": 20
+      }
+    },
+    "analyzer": {
+      "autocomplete_index_analyzer": {
+        "type": "custom",
+        "tokenizer": "standard",
+        "filter": ["lowercase", "edge_ngram_filter"]
+      },
+      "autocomplete_search_analyzer": {
+        "type": "custom",
+        "tokenizer": "standard",
+        "filter": ["lowercase"]
+      }
+    }
+  }
+}
+```
+
+#### 설정 조합별 검색 결과 비교
+
+**시나리오: "김치찌개"가 인덱싱된 상태에서 검색**
+
+| 설정 | analyzer (인덱싱) | searchAnalyzer (검색) | "김치" 검색 | "김치찍" 검색 | 설명 |
+|------|------------------|----------------------|------------|--------------|------|
+| 기본 설정 | simple | simple | ✅ 나옴 | ❌ 안 나옴 | Completion 기본 prefix 매칭 |
+| 설정 1 | edge_ngram O | edge_ngram O | ✅ 나옴 | ✅ 나옴 | 검색 토큰 "김", "김치"가 매칭 |
+| 설정 2 | edge_ngram O | edge_ngram X | ✅ 나옴 | ❌ 안 나옴 | "김치찍" 전체가 prefix로 매칭 시도 |
+| 설정 3 | edge_ngram X | edge_ngram O | ✅ 나옴 | ✅ 나옴 | 검색 토큰 "김", "김치"가 prefix 매칭 |
+
+**설정 1, 3에서 "김치찍"이 검색되는 이유:**
+- searchAnalyzer에 edge_ngram이 적용되면 "김치찍" → `["김", "김치", "김치찍"]`으로 분해
+- 분해된 토큰 중 "김", "김치"가 "김치찌개"의 prefix와 매칭됨
+
+#### 정석적인 자동완성 설정 (권장)
+
+**인덱싱 시에만 edge_ngram을 적용하고, 검색 시에는 적용하지 않는 것이 일반적입니다:**
+
+```kotlin
+@CompletionField(
+    analyzer = "autocomplete_index_analyzer",        // edge_ngram 적용
+    searchAnalyzer = "autocomplete_search_analyzer"  // edge_ngram 미적용
+)
+val suggests: Completion = Completion(listOf(name.lowercase()))
+```
+
+**이 설정의 동작:**
+
+| 검색어 | 토큰화 결과 | "김치찌개" 매칭 여부 |
+|--------|-----------|-------------------|
+| "김" | `["김"]` | ✅ 매칭 (prefix) |
+| "김치" | `["김치"]` | ✅ 매칭 (prefix) |
+| "김치찌" | `["김치찌"]` | ✅ 매칭 (prefix) |
+| "김치찌개" | `["김치찌개"]` | ✅ 매칭 (prefix) |
+| "김치찍" (오타) | `["김치찍"]` | ❌ 매칭 안 됨 |
+
+#### 오타까지 허용하는 설정
+
+만약 **searchAnalyzer에도 edge_ngram을 적용**하면 오타도 부분적으로 허용됩니다:
+
+```kotlin
+@CompletionField(
+    analyzer = "autocomplete_index_analyzer",       // edge_ngram 적용
+    searchAnalyzer = "autocomplete_index_analyzer"  // edge_ngram 적용 (동일)
+)
+val suggests: Completion = Completion(listOf(name.lowercase()))
+```
+
+**이 설정의 동작:**
+
+| 검색어 | 토큰화 결과 | "김치찌개" 매칭 여부 | 이유 |
+|--------|-----------|-------------------|------|
+| "김치찍" | `["김", "김치", "김치찍"]` | ✅ 매칭 | "김", "김치"가 prefix로 매칭 |
+| "찌개" | `["찌", "찌개"]` | ❌ 매칭 안 됨 | "찌", "찌개"로 시작하는 항목 없음 |
+
+> **주의:** 이 방식은 엄밀히 말해 "오타 보정"이 아니라 **공통 접두사 매칭**입니다. "김치찍"이 검색되는 이유는 "김치"라는 공통 부분이 매칭되기 때문입니다.
+
+#### 진정한 오타 보정이 필요하다면
+
+Fuzzy 검색을 함께 사용하세요:
+
+```kotlin
+val suggester = Suggester.of { s ->
+    s.suggesters("prod-suggest") { fs ->
+        fs.prefix("김치찍")
+            .completion { c ->
+                c.field("suggests")
+                    .fuzzy { f ->
+                        f.fuzziness("AUTO")  // 자동 오타 허용
+                            .transpositions(true)
+                            .minLength(2)
+                            .prefixLength(1)
+                    }
+            }
+    }
+}
+```
+
+### Completion 클래스
+
+`Completion` 클래스는 자동완성에 사용될 입력 문자열들을 담습니다.
+
+```kotlin
+// 단일 입력
+val suggests = Completion(listOf("삼성 갤럭시"))
+
+// 다중 입력 (여러 키워드로 검색 가능)
+val suggests = Completion(listOf(
+    "삼성 갤럭시 s23",
+    "갤럭시 s23",
+    "samsung",
+    "galaxy",
+    "s23",
+    "삼성"
+))
+
+// 가중치(weight) 포함 - 높을수록 상위에 표시
+val suggests = Completion(
+    input = listOf("삼성 갤럭시 s23"),
+    weight = 10  // 가중치
+)
+```
+
+## Completion Suggester API
+
+Elasticsearch의 Suggester API는 자동완성 검색을 수행합니다. Spring Data Elasticsearch에서는 `Suggester` 클래스를 사용합니다.
+
+### Suggester 구성 요소
+
+| 요소 | 설명 |
+|-----|-----|
+| `prefix` | 사용자가 입력한 검색어 (접두사) |
+| `field` | 검색할 Completion 필드 이름 |
+| `size` | 반환할 최대 결과 수 |
+| `skipDuplicates` | 중복 결과 제거 여부 |
+| `fuzzy` | 오타 허용 설정 |
+
+### 기본 사용법
+
+```kotlin
+// Suggester 생성
+val suggester = Suggester.of { s ->
+    s.suggesters("prod-suggest") { fs ->
+        fs.prefix("삼")  // 사용자 입력
+            .completion { c ->
+                c.field("suggests")  // Completion 필드 이름
+                    .size(10)  // 최대 10개 결과
+                    .skipDuplicates(true)  // 중복 제거
+            }
+    }
+}
+
+// 쿼리 빌드
+val query = NativeQueryBuilder()
+    .withSuggester(suggester)
+    .withMaxResults(0)  // 문서는 가져오지 않음 (suggestion만 필요)
+    .build()
+
+// 검색 실행
+val result = elasticsearchOperations.search(query, Product::class.java)
+```
+
+### Fuzzy Completion (오타 허용)
+
+사용자의 오타를 허용하는 fuzzy 검색을 설정할 수 있습니다.
+
+```kotlin
+val suggester = Suggester.of { s ->
+    s.suggesters("prod-suggest") { fs ->
+        fs.prefix("삼선")  // 오타 (삼성 → 삼선)
+            .completion { c ->
+                c.field("suggests")
+                    .size(10)
+                    .fuzzy { f ->
+                        f.fuzziness("AUTO")  // 자동 오타 허용
+                            .transpositions(true)  // 문자 위치 변경 허용
+                            .minLength(3)  // 최소 3글자부터 fuzzy 적용
+                            .prefixLength(1)  // 첫 1글자는 정확히 일치해야 함
+                    }
+            }
+    }
+}
+```
+
+### Suggestion 결과 파싱
+
+```kotlin
+val result = elasticsearchOperations.search(query, Product::class.java)
+
+// Suggestion 결과 추출
+val suggestions = result.suggest
+    ?.suggestions
+    ?.filterIsInstance<CompletionSuggestion<Product>>()
+    ?.flatMap { cs ->
+        cs.entries.flatMap { e ->
+            e.options.mapNotNull { o ->
+                o.searchHit?.content  // Product 객체
+            }
+        }
+    } ?: emptyList()
+
+// 결과 출력
+suggestions.forEach { product ->
+    println("${product.name} - ${product.price}")
+}
+```
+
+
+## Completion Suggester 활용 팁
+
+### 1. 다양한 키워드 등록
+
+사용자가 다양한 방식으로 검색할 수 있도록 여러 키워드를 등록합니다.
+
+```kotlin
+// 한국어, 영어, 약어 등 다양한 입력 등록
+suggests = Completion(listOf(
+    "삼성 갤럭시 s23",      // 풀네임
+    "갤럭시 s23",           // 축약
+    "samsung",              // 영문
+    "galaxy s23",           // 영문 풀네임
+    "s23",                  // 모델명만
+    "삼성"                  // 브랜드명
+))
+```
+
+### 2. 가중치 활용
+
+인기 상품이나 추천 상품에 높은 가중치를 부여합니다.
+
+```kotlin
+// 인기 상품에 높은 가중치 부여
+val suggests = Completion(
+    input = listOf("삼성 갤럭시 s23"),
+    weight = salesCount  // 판매량을 가중치로 사용
+)
+```
+
+
+## Completion vs 다른 검색 방법
+
+| 방법 | 장점 | 단점 | 적합한 상황 |
+|-----|-----|-----|----------|
+| **Completion Suggester** | 매우 빠름, 메모리 최적화 | 별도 필드 필요 | 실시간 자동완성 |
+| **match_phrase_prefix** | 설정 간단 | 느림, 대량 데이터에서 성능 저하 | 소규모 데이터 |
+| **Edge N-gram** | 유연한 검색 | 인덱스 크기 증가 | 부분 문자열 매칭 필요 시 |
+
+## Completion 선택 가이드
+
+```
+자동완성 기능이 필요한가?
+├── 실시간 추천 (밀리초 응답 필요)
+│   └── Completion Suggester 사용
+├── 간단한 접두사 검색 (소규모 데이터)
+│   └── match_phrase_prefix 사용
+└── 중간 문자열 매칭 필요
+    └── Edge N-gram + match 사용
+```
