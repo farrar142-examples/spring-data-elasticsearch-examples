@@ -14,7 +14,7 @@ import java.time.LocalDateTime
 @Document(indexName = "products")
 @Setting(settingPath = "elasticsearch/settings.json")
 data class Product(
-    @Field(type = FieldType.Text, analyzer = "nori")
+    @Field(type = FieldType.Text, analyzer = "nori", searchAnalyzer = "synonym_analyzer")
     val name: String,
 
     @Field(type = FieldType.Text, analyzer = "nori")

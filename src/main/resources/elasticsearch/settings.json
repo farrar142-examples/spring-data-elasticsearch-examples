@@ -5,6 +5,12 @@
         "type": "edge_ngram",
         "min_gram": 1,
         "max_gram": 20
+      },
+      "synonym_filter": {
+        "type": "synonym_graph",
+        "synonyms": [
+          "김치찌개, kimchi stew"
+        ]
       }
     },
     "analyzer": {
@@ -17,6 +23,11 @@
         "type": "custom",
         "tokenizer": "standard",
         "filter": ["lowercase"]
+      },
+      "synonym_analyzer": {
+        "type": "custom",
+        "tokenizer": "nori_tokenizer",
+        "filter": ["lowercase", "synonym_filter"]
       }
     }
   }

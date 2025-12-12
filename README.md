@@ -2730,3 +2730,280 @@ val suggests = Completion(
 └── 중간 문자열 매칭 필요
     └── Edge N-gram + match 사용
 ```
+# 14. Synonym 필터를 이용한 검색 예제
+
+```json
+// src/main/resources/elasticsearch/settings.json
+{
+  "analysis": {
+    "filter": {
+      "synonym_filter": {
+        "type": "synonym_graph",
+        "synonyms": [
+          "김치찌개, kimchi stew"
+        ]
+      }
+    },
+    "analyzer": {
+      "synonym_analyzer": {
+        "type": "custom",
+        "tokenizer": "nori_tokenizer",
+        "filter": ["lowercase", "synonym_filter"]
+      }
+    }
+  }
+}
+```
+
+```kotlin
+// src/main/kotlin/com/example/demo/products/documents/Product.kt
+@Document(indexName = "products")
+@Setting(settingPath = "elasticsearch/settings.json")
+data class Product(
+    @Field(type = FieldType.Text, analyzer = "nori", searchAnalyzer = "synonym_analyzer")
+    val name: String,
+
+    @Field(type = FieldType.Text, analyzer = "nori")  // synonym 미적용
+    val description: String,
+    
+    // ... 기타 필드 ...
+)
+```
+
+```kotlin
+// src/test/kotlin/com/example/demo/ElasticsearchQueryTests.kt
+@Test
+fun `Synonyms를 이용한 동의어 검색 예제`(){
+    val product = Product(
+        name = "김치찌개",
+        description = "김치찌개",
+        price = 999,
+        category = "Foods",
+        stock = 150,
+        createdAt = LocalDateTime.now().minusDays(1),
+        available = true
+    ).let(productRepository::save)
+    
+    // name 필드: searchAnalyzer = "synonym_analyzer" 적용
+    // "kimchi stew"로 검색하면 "김치찌개"가 검색됨
+    val synonymNameQuery = elasticsearchOperations.search(
+        NativeQueryBuilder().withQuery { q ->
+            q.match { m ->
+                m.field("name")
+                    .query("kimchi stew")
+            }
+        }.build(),
+        Product::class.java
+    )
+    synonymNameQuery.forEach {
+        println("${it.content.name} - ${it.content.description}")
+    }
+    assertTrue(synonymNameQuery.searchHits.isNotEmpty())
+    
+    // description 필드: synonym_analyzer 미적용
+    // "kimchi stew"로 검색해도 "김치찌개"가 검색되지 않음
+    val synonymDescriptionQuery = elasticsearchOperations.search(
+        NativeQueryBuilder().withQuery { q ->
+            q.match { m ->
+                m.field("description")
+                    .query("kimchi stew")
+            }
+        }.build(),
+        Product::class.java
+    )
+    synonymDescriptionQuery.forEach{
+        println("${it.content.name} - ${it.content.description}")
+    }
+    assertTrue(synonymDescriptionQuery.searchHits.isEmpty())
+}
+```
+
+Synonym(동의어) 필터는 검색 시 **동의어를 확장하여 검색 결과를 향상**시키는 기능입니다. 예를 들어 "kimchi stew"로 검색하면 "김치찌개"도 함께 검색되도록 할 수 있습니다.
+
+## Synonym 필터란?
+
+Synonym 필터는 Elasticsearch의 분석기(Analyzer)에서 사용하는 토큰 필터로, **동의어 관계를 정의하여 검색 범위를 확장**합니다.
+
+### 주요 활용 사례
+
+| 활용 사례 | 예시 |
+|----------|------|
+| 다국어 검색 | "김치찌개" ↔ "kimchi stew" |
+| 약어/풀네임 | "TV" ↔ "television" |
+| 브랜드/일반명 | "아이폰" ↔ "iPhone" ↔ "스마트폰" |
+| 오타/변형 | "삼겹살" ↔ "삼겹살이" |
+
+## Synonym 필터 타입
+
+Elasticsearch는 두 가지 Synonym 필터 타입을 제공합니다.
+
+### synonym vs synonym_graph
+
+| 타입 | 설명 | 멀티 토큰 지원 | 권장 용도 |
+|------|------|--------------|----------|
+| `synonym` | 단일 토큰 동의어 | ❌ | 단순 동의어 |
+| `synonym_graph` | 멀티 토큰 동의어 | ✅ | **권장** |
+
+> **권장:** `synonym_graph`를 사용하세요. "kimchi stew"처럼 여러 단어로 구성된 동의어를 올바르게 처리합니다.
+
+## Synonym 규칙 작성법
+
+### 1. 쌍방향 동의어 (Equivalent Synonyms)
+
+```json
+"synonyms": [
+  "김치찌개, kimchi stew",
+  "삼성, samsung, 삼전"
+]
+```
+
+- 쉼표(,)로 구분된 단어들은 **서로 동의어**로 취급
+- "김치찌개"로 검색하면 "kimchi stew"도 매칭
+- "kimchi stew"로 검색하면 "김치찌개"도 매칭
+
+### 2. 단방향 동의어 (Explicit Mappings)
+
+```json
+"synonyms": [
+  "아이폰 => iphone, smartphone",
+  "갤럭시 => galaxy, smartphone"
+]
+```
+
+- `=>`를 사용하면 **단방향 매핑**
+- "아이폰"으로 검색하면 "iphone", "smartphone"도 매칭
+- 반대로 "iphone"으로 검색해도 "아이폰"은 매칭되지 않음
+
+### 3. 파일로 동의어 관리
+
+```json
+"synonym_filter": {
+  "type": "synonym_graph",
+  "synonyms_path": "analysis/synonyms.txt"
+}
+```
+
+`config/analysis/synonyms.txt`:
+```
+김치찌개, kimchi stew
+삼성, samsung
+아이폰 => iphone, smartphone
+```
+
+> **참고:** `synonyms_path`는 Elasticsearch config 디렉토리 기준 상대 경로입니다.
+
+## analyzer와 searchAnalyzer 설정 시 주의사항
+
+Synonym 필터를 사용할 때 **analyzer와 searchAnalyzer의 토큰화 방식이 일치해야** 합니다.
+
+### 문제 상황 예시
+
+```kotlin
+// 잘못된 설정
+@Field(type = FieldType.Text, analyzer = "nori", searchAnalyzer = "synonym_analyzer")
+val name: String
+```
+
+만약 `synonym_analyzer`가 `standard` tokenizer를 사용한다면:
+
+| 단계 | Tokenizer | 입력 | 토큰화 결과 |
+|------|-----------|------|------------|
+| 인덱싱 | nori | "김치찌개" | `["김치", "찌개"]` |
+| 검색 | standard | "kimchi stew" | `["kimchi", "stew"]` |
+
+**토큰이 다르므로 매칭 실패!**
+
+### 올바른 설정
+
+```json
+// settings.json
+"synonym_analyzer": {
+  "type": "custom",
+  "tokenizer": "nori_tokenizer",  // nori와 동일한 tokenizer 사용
+  "filter": ["lowercase", "synonym_filter"]
+}
+```
+
+이렇게 하면:
+
+| 단계 | Tokenizer | 입력 | 토큰화 결과 |
+|------|-----------|------|------------|
+| 인덱싱 | nori | "김치찌개" | `["김치", "찌개"]` |
+| 검색 | nori + synonym | "kimchi stew" | `["김치", "kimchi", "찌개", "stew"]` |
+
+**"김치", "찌개" 토큰이 매칭되어 검색 성공!**
+
+## 토큰 분석 확인 방법
+
+Analyzer가 텍스트를 어떻게 토큰화하는지 확인할 수 있습니다.
+
+```bash
+# nori analyzer로 "김치찌개" 분석
+curl -X POST "localhost:9200/products/_analyze" \
+  -H "Content-Type: application/json" \
+  -d '{"analyzer": "nori", "text": "김치찌개"}'
+
+# 결과: ["김치", "찌개"]
+```
+
+```bash
+# synonym_analyzer로 "kimchi stew" 분석
+curl -X POST "localhost:9200/products/_analyze" \
+  -H "Content-Type: application/json" \
+  -d '{"analyzer": "synonym_analyzer", "text": "kimchi stew"}'
+
+# 결과: ["김치", "kimchi", "찌개", "stew"]
+```
+
+## Synonym 필터 활용 팁
+
+### 1. 인덱싱 vs 검색 시점
+
+| 적용 시점 | 장점 | 단점 |
+|----------|------|------|
+| **인덱싱 시** | 검색 성능 좋음 | 동의어 변경 시 재인덱싱 필요 |
+| **검색 시** (권장) | 동의어 변경이 즉시 반영 | 검색 시 약간의 오버헤드 |
+
+```kotlin
+// 검색 시에만 synonym 적용 (권장)
+@Field(type = FieldType.Text, analyzer = "nori", searchAnalyzer = "synonym_analyzer")
+val name: String
+```
+
+### 2. 대소문자 처리
+
+Synonym 필터 **앞에** `lowercase` 필터를 배치하세요.
+
+```json
+"synonym_analyzer": {
+  "type": "custom",
+  "tokenizer": "nori_tokenizer",
+  "filter": ["lowercase", "synonym_filter"]  // lowercase가 먼저!
+}
+```
+
+### 3. 동의어 규칙도 소문자로
+
+```json
+"synonyms": [
+  "김치찌개, kimchi stew",  // 소문자로 작성
+  "삼성, samsung"
+]
+```
+
+## 필드별 Synonym 적용 여부
+
+예제에서 `name` 필드에만 synonym을 적용하고 `description`에는 적용하지 않았습니다.
+
+```kotlin
+@Field(type = FieldType.Text, analyzer = "nori", searchAnalyzer = "synonym_analyzer")
+val name: String  // synonym 적용 ✅
+
+@Field(type = FieldType.Text, analyzer = "nori")
+val description: String  // synonym 미적용 ❌
+```
+
+**결과:**
+- `name` 필드: "kimchi stew" 검색 → "김치찌개" 매칭 ✅
+- `description` 필드: "kimchi stew" 검색 → 매칭 없음 ❌
+

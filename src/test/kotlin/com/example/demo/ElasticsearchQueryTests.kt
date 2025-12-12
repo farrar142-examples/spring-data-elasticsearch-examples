@@ -13,6 +13,8 @@ import co.elastic.clients.json.JsonData
 import com.example.demo.products.documents.Product
 import com.example.demo.products.repositories.ProductRepository
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestMethodOrder
@@ -35,6 +37,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalUnit
 import kotlin.test.assertContains
 import kotlin.test.assertContentEquals
+import kotlin.test.assertNull
 
 @SpringBootTest
 class ElasticsearchQueryTests {
@@ -1245,5 +1248,44 @@ class ElasticsearchQueryTests {
 		r.forEach {
 			println("${it.name} - ${it.price}")
 		}
+	}
+
+	@Test
+	fun `Synonyms를 이용한 동의어 검색 예제`(){
+		val product = Product(
+			name = "김치찌개",
+			description = "김치찌개",
+			price = 999,
+			category = "Foods",
+			stock = 150,
+			createdAt = LocalDateTime.now().minusDays(1),
+			available = true
+		).let(productRepository::save)
+		val synonymNameQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.match { m ->
+					m.field("name")
+						.query("kimchi stew")
+				}
+			}.build(),
+			Product::class.java
+		)
+		synonymNameQuery.forEach {
+			println("${it.content.name} - ${it.content.description}")
+		}
+		assertTrue(synonymNameQuery.searchHits.isNotEmpty())
+		val synonymDescriptionQuery = elasticsearchOperations.search(
+			NativeQueryBuilder().withQuery { q ->
+				q.match { m ->
+					m.field("description")
+						.query("kimchi stew")
+				}
+			}.build(),
+			Product::class.java
+		)
+		synonymDescriptionQuery.forEach{
+			println("${it.content.name} - ${it.content.description}")
+		}
+		assertTrue(synonymDescriptionQuery.searchHits.isEmpty())
 	}
 }
